@@ -131,12 +131,6 @@ export class BidAcceptanceService {
       });
     }
 
-    try {
-      await this.recordDepositTxFn(bookingId, depositTx?.hash || depositTx?.transactionHash || '');
-    } catch (recordErr) {
-      this.logger?.warn?.('[escrow] Failed to record deposit TX:', recordErr.message);
-    }
-
     if (this.notificationDispatcher) {
       try {
         await this.notificationDispatcher({
