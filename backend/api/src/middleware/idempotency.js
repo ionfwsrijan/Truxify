@@ -36,11 +36,6 @@ function isCacheable(statusCode) {
   return CACHEABLE_STATUS.has(statusCode);
 }
 
-function cacheKey(req, idempotencyKey) {
-  const identity = req.user?.id || 'anonymous';
-  return `idempotency:${identity}:${idempotencyKey}`;
-}
-
 function readAndParse(str) {
   try {
     return JSON.parse(str);
@@ -59,19 +54,8 @@ export function requireIdempotency(ttlSeconds = 3600) {
       return res.status(400).json({ error: 'X-Idempotency-Key header is required for this action.' });
     }
 
-<<<<<<< feature/idempotency-key-support
-    const key = cacheKey(req, idempotencyKey);
-=======
-    if (!redisClient) {
-      return next();
-    }
-
-    // Identity: authenticated user ID or fallback to anonymous.
-    // Scope the key by method + originalUrl so two different endpoints (or
-    // verbs) sharing a user + key cannot collide.
     const identity = req.user?.id || 'anonymous';
-    const cacheKey = `idempotency:${identity}:${req.method}:${req.originalUrl}:${idempotencyKey}`;
->>>>>>> main
+    const key = `idempotency:${identity}:${req.method}:${req.originalUrl}:${idempotencyKey}`;
 
     try {
       let cached = null;
@@ -84,7 +68,6 @@ export function requireIdempotency(ttlSeconds = 3600) {
       }
 
       if (cached) {
-        logger.info(`[Idempotency] Cache hit for key ${idempotencyKey}`);
         return res.status(cached.statusCode).json(cached.body);
       }
 
@@ -92,7 +75,6 @@ export function requireIdempotency(ttlSeconds = 3600) {
 
       const originalJson = res.json.bind(res);
       res.json = function (body) {
-<<<<<<< feature/idempotency-key-support
         if (responded) return originalJson(body);
         responded = true;
 
@@ -106,20 +88,6 @@ export function requireIdempotency(ttlSeconds = 3600) {
           } else {
             setInMemory(key, cacheData, ttlMs);
           }
-=======
-        // Only cache successful (2xx) responses. Caching failures (e.g. 400,
-        // 409) would block legitimate client retries with the same key for the
-        // whole TTL, and 5xx is never cached so the client can retry.
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          const cacheData = JSON.stringify({
-            statusCode: res.statusCode,
-            body: body
-          });
-          
-          redisClient.set(cacheKey, cacheData, 'EX', ttlSeconds).catch(err => {
-            logger.error(`[Idempotency] Failed to cache response for key ${idempotencyKey}: ${err.message}`);
-          });
->>>>>>> main
         }
 
         return originalJson(body);
