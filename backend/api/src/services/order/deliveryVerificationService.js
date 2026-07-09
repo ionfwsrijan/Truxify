@@ -10,6 +10,7 @@ import {
   verifyDeliveryOtp,
 } from '../notificationService.js';
 import { escrowRelease } from '../escrow.js';
+import { SupplierService } from '../supplierService.js';
 import logger from '../../middleware/logger.js';
 
 const OTP_TTL_MINUTES = parseInt(process.env.OTP_TTL_MINUTES || '15', 10);
@@ -96,6 +97,7 @@ async function clearOtpState(orderId) {
 export class DeliveryVerificationService {
   constructor(orderRepository) {
     this.orderRepository = orderRepository;
+    this.supplierService = new SupplierService(orderRepository);
   }
 
   async validateDeliveryOtp({ orderId, driverId, otp }) {
@@ -224,14 +226,11 @@ export class DeliveryVerificationService {
     );
 
     if (guardResult.error) {
-      throw new DomainError(409, { error: 'Order was already cancelled or payment released.' });
+      if (guardResult.error.code === 'PGRST116') {
+        throw new DomainError(409, { error: 'Order was already cancelled or payment released.' });
+      }
+      throw new DomainError(500, { error: 'Failed to verify OTP.', details: guardResult.error.message });
     }
-  if (guardErr) {
-    if (guardErr.code === 'PGRST116') {
-      throw new DomainError(409, { error: 'Order was already cancelled or payment released.' });
-    }
-    throw new DomainError(500, { error: 'Failed to verify OTP.', details: guardErr.message });
-  }
 
     let releaseTxHash = null;
     let escrowAlreadyReleased = false;
@@ -282,6 +281,15 @@ export class DeliveryVerificationService {
     }
 
     await this.completeDeliveryOtp({ otpRecordId: otpRecord.id, orderId });
+
+    if (order.driver_id) {
+      await this.supplierService.supplierStatusUpdate({
+        supplierId: order.driver_id,
+        status: 'delivery_completed',
+        orderId: order.id,
+        metadata: { completed_at: new Date().toISOString() },
+      });
+    }
 
     let escrowUpdateFailed = false;
     if (releaseTxHash || escrowAlreadyReleased) {
