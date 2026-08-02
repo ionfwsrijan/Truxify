@@ -223,7 +223,7 @@ let telemetryOverflowDropped = 0;
 const WS_UPGRADE_RATE_LIMIT = 5;
 const WS_UPGRADE_RATE_WINDOW_SECONDS = 60;
 const MAX_MSG_PER_SECOND = 10;
-const WS_MAX_PAYLOAD_BYTES = 4096;
+const WS_MAX_PAYLOAD_BYTES = parseInt(process.env.WS_MAX_PAYLOAD_BYTES, 10) || 4096;
 const messageRateTracker = new WeakMap();
 
 // Max time a socket may stay unauthenticated while awaiting a first-frame
@@ -672,26 +672,22 @@ export async function handleLocationPing(ws, data, req) {
   const lat = data.lat !== undefined ? data.lat : data.latitude;
   const lng = data.lng !== undefined ? data.lng : data.longitude;
 
-  // Fix 3: Coordinate validation — proper null/undefined, type, and range validation
-  if (lat === null || lat === undefined || typeof lat !== 'number' || !Number.isFinite(lat) ||
-      lng === null || lng === undefined || typeof lng !== 'number' || !Number.isFinite(lng)) {
-    return ws.send(JSON.stringify({ error: 'Missing mandatory tracking parameters (lat, lng).' }));
-  }
+  // Fix 3 + dead-code fix: run the payload through the schema validator/
+  const normalizedForValidation = {
+    lat,
+    lng,
+    driverId: driver_id,
+    timestamp: device_timestamp ? Date.parse(device_timestamp) || Date.now() : Date.now(),
+    speed: typeof speed === 'number' ? speed : undefined,
+    heading: typeof bearing === 'number' ? bearing : undefined,
+  };
 
-  // Range validation
-  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-    return ws.send(JSON.stringify({ error: 'Coordinates out of valid range' }));
-  }
-
-  // Schema-validate and sanitize the telemetry payload before further
-  // processing (issue #5758). Enforces field ranges and string lengths that
-  // the inline guards above do not cover.
-  const validationErrors = validateTelemetryPayload(data);
+  const validationErrors = validateTelemetryPayload(normalizedForValidation);
   if (validationErrors) {
-    return ws.send(JSON.stringify({ error: 'Invalid telemetry payload', details: validationErrors }));
+    return ws.send(JSON.stringify({ error: 'Invalid telemetry payload.', details: validationErrors }));
   }
-  const sanitized = sanitizeTelemetryData(data);
-  Object.assign(data, sanitized);
+
+  const sanitized = sanitizeTelemetryData(normalizedForValidation);
 
   // Parse device timestamp for analytics and clock skew check only (Fix 1)
   let deviceTime = null;
@@ -803,17 +799,17 @@ export async function handleLocationPing(ws, data, req) {
     telemetryOverflowDropped++;
   }
   await telemetryWriteBuffer.push({
-    driver_id,
-    order_id: orderUUID || null,
-    order_display_id: orderDisplayId || null,
-    lat,
-    lng,
-    location: {
-      type: 'Point',
-      coordinates: [parseFloat(lng), parseFloat(lat)]
-    },
-    speed_kmh: speed || 0,
-    bearing_deg: bearing || 0,
+  driver_id,
+  order_id: orderUUID || null,
+  order_display_id: orderDisplayId || null,
+  lat: sanitized.lat,
+  lng: sanitized.lng,
+  location: {
+    type: 'Point',
+    coordinates: [sanitized.lng, sanitized.lat]
+  },
+  speed_kmh: sanitized.speed ?? 0,
+  bearing_deg: sanitized.heading ?? 0,
     timestamp: deviceTime || new Date(),
     pinged_at: deviceTime || new Date(),
     buffered_at: new Date(),
@@ -833,7 +829,7 @@ export async function handleLocationPing(ws, data, req) {
       const redisKey = `driver:location:${driver_id}`;
       await redisClient.set(
         redisKey,
-        JSON.stringify({ latitude: lat, longitude: lng, speed: speed || 0, bearing: bearing || 0, updated_at: new Date(serverNow) }),
+        JSON.stringify({ latitude: sanitized.lat, longitude: sanitized.lng, speed: sanitized.speed ?? 0, bearing: sanitized.heading ?? 0, updated_at: new Date(serverNow) }),
         'EX',
         120
       );
@@ -847,10 +843,10 @@ export async function handleLocationPing(ws, data, req) {
     data: {
       driver_id,
       order_display_id: orderDisplayId,
-      latitude: lat,
-      longitude: lng,
-      speed: speed || 0,
-      bearing: bearing || 0,
+      latitude: sanitized.lat,
+      longitude: sanitized.lng,
+      speed: sanitized.speed ?? 0,
+      bearing: sanitized.heading ?? 0,
       timestamp: new Date(serverNow)
     }
   });
@@ -894,8 +890,8 @@ export async function handleLocationPing(ws, data, req) {
       payload: {
         orderId: orderUUID,
         driverId: driver_id,
-        lat,
-        lng,
+        lat: sanitized.lat,
+        lng: sanitized.lng,
         timestamp: new Date(serverNow).toISOString()
       }
     }).catch((err) => {

@@ -174,6 +174,18 @@ if (!process.env.DRIVER_LOGIN_OTP) {
 }
 
 // ============================================================================
+// 🆕 WEBHOOK VALIDATION
+// ============================================================================
+if (!process.env.WEBHOOK_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    logger.fatal('WEBHOOK_SECRET is not set. POST /api/webhooks/escrow would fail closed and reject all incoming webhooks. Set WEBHOOK_SECRET and restart.')
+    process.exit(1)
+  } else {
+    logger.warn('⚠️ WEBHOOK_SECRET is not set. Webhook requests will be rejected (fail-closed) until it is configured.')
+  }
+}
+
+// ============================================================================
 // 🆕 OTEL VALIDATION
 // ============================================================================
 if (!process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {

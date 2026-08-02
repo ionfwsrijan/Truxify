@@ -13,11 +13,32 @@ export async function optimizeWaypoints(start, end, waypoints) {
   if (waypoints.length === 1) return waypoints; // Nothing to reorder
 
   try {
+    const normalizeCoordinatePoint = (point, label) => {
+      const lat = Number(point?.lat);
+      const lng = Number(point?.lng);
+
+      if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+        throw new Error(`Invalid latitude for ${label}`);
+      }
+
+      if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+        throw new Error(`Invalid longitude for ${label}`);
+      }
+
+      return { lat, lng };
+    };
+
+    const normalizedStart = normalizeCoordinatePoint(start, 'start');
+    const normalizedEnd = normalizeCoordinatePoint(end, 'end');
+    const normalizedWaypoints = waypoints.map((wp, index) =>
+      normalizeCoordinatePoint(wp, `waypoint ${index + 1}`)
+    );
+
     // Construct coordinate string: OSRM uses lon,lat
     const coords = [
-      `${start.lng},${start.lat}`,
-      ...waypoints.map(wp => `${wp.lng},${wp.lat}`),
-      `${end.lng},${end.lat}`
+      `${normalizedStart.lng},${normalizedStart.lat}`,
+      ...normalizedWaypoints.map(wp => `${wp.lng},${wp.lat}`),
+      `${normalizedEnd.lng},${normalizedEnd.lat}`
     ].join(';');
 
     // Use OSRM trip API with configurable URL
