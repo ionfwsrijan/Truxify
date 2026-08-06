@@ -182,57 +182,59 @@ import { computeOrderPricing } from '../lib/pricing.js';
 
 const router = express.Router();
 
-router.post('/api/deliveries/:id/geofence-confirm', (req, res) => {
-  const { driver_lat, driver_lng, geofence_radius_m } = req.body;
+router.post('/api/deliveries/:id/geofence-confirm', async (req, res) => {
+  try {
+    const { driver_lat, driver_lng, geofence_radius_m } = req.body;
 
-  const lat = parseFloat(driver_lat);
-  const lng = parseFloat(driver_lng);
+    const lat = parseFloat(driver_lat);
+    const lng = parseFloat(driver_lng);
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    return res.status(400).json({ error: 'Invalid driver_lat or driver_lng' });
-  }
-
-  if (geofence_radius_m !== undefined) {
-    const radius = parseFloat(geofence_radius_m);
-    if (!Number.isFinite(radius) || radius <= 0) {
-      return res.status(400).json({ error: 'Invalid geofence_radius_m' });
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ error: 'Invalid driver_lat or driver_lng' });
     }
-  }
 
-      // Verify the order exists and the requesting driver is assigned to it
-      const order = await orderValidationService.findOrderByIdOrDisplayId(
-        req.params.id,
-        'id, driver_id, customer_id'
-      );
-      orderValidationService.assertOrderFound(order);
-      orderValidationService.assertDriverAssignment(order, req.user.id);
-
-      logger.info({
-        event: 'GEOFENCE_CONFIRM_ATTEMPT',
-        orderId: req.params.id,
-        driverId: req.user.id,
-        lat,
-        lng,
-      }, 'Driver geofence confirm attempt');
-
-      const result = await orderLifecycleService.deliveryVerification.geofenceAutoConfirm({
-        orderId: req.params.id,
-        driverId: req.user.id,
-        driverLat: lat,
-        driverLng: lng,
-        geofenceRadiusM,
-      });
-
-      return res.json(result);
-    } catch (err) {
-      if (err instanceof DomainError) {
-        return res.status(err.status).json(err.payload);
+    let geofenceRadiusM;
+    if (geofence_radius_m !== undefined) {
+      const radius = parseFloat(geofence_radius_m);
+      if (!Number.isFinite(radius) || radius <= 0) {
+        return res.status(400).json({ error: 'Invalid geofence_radius_m' });
       }
-      logger.error('[geofence-confirm] Exception:', err.message);
-      return res.status(500).json({ error: 'Internal Server Error' });
+      geofenceRadiusM = radius;
     }
+
+    // Verify the order exists and the requesting driver is assigned to it
+    const order = await orderValidationService.findOrderByIdOrDisplayId(
+      req.params.id,
+      'id, driver_id, customer_id'
+    );
+    orderValidationService.assertOrderFound(order);
+    orderValidationService.assertDriverAssignment(order, req.user.id);
+
+    logger.info({
+      event: 'GEOFENCE_CONFIRM_ATTEMPT',
+      orderId: req.params.id,
+      driverId: req.user.id,
+      lat,
+      lng,
+    }, 'Driver geofence confirm attempt');
+
+    const result = await orderLifecycleService.deliveryVerification.geofenceAutoConfirm({
+      orderId: req.params.id,
+      driverId: req.user.id,
+      driverLat: lat,
+      driverLng: lng,
+      geofenceRadiusM,
+    });
+
+    return res.json(result);
+  } catch (err) {
+    if (err instanceof DomainError) {
+      return res.status(err.status).json(err.payload);
+    }
+    logger.error('[geofence-confirm] Exception:', err.message);
+    return res.status(500).json({ error: 'Internal Server Error' });
   }
-);
+});
 
 // ============================================================================
 // 13c. DRIVER OTP CONFIRM ALIAS — POST /api/deliveries/:id/confirm-otp
