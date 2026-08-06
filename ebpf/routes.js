@@ -1,4 +1,5 @@
 import express from 'express';
+import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import rateLimit from 'express-rate-limit';
@@ -206,7 +207,11 @@ router.post('/ebpf/load', authenticate, requirePolicy('ebpf:manage'), ebpfAction
         }
 
         // Execute with sanitized input
-        const result = await execAsync(`sudo bpftool prog load " + (process.env.EBPF_PROGRAMS_PATH || path.join(process.cwd(), "ebpf", "programs")) + "${program}.o /sys/fs/bpf/truxify_${program}`);
+        const objectFile = path.join(
+            process.env.EBPF_PROGRAMS_PATH || path.join(process.cwd(), 'ebpf', 'programs'),
+            `${program}.o`
+        );
+        const result = await execAsync(`sudo bpftool prog load "${objectFile}" /sys/fs/bpf/truxify_${program}`);
         
         res.json({
             success: true,
