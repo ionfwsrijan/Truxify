@@ -5,7 +5,6 @@ const SQLI_PATTERNS = [
   /drop\s+table/i,
   /insert\s+into/i,
   /or\s+1=1/i,
-  /--/,
 ];
 
 const XSS_PATTERNS = [
