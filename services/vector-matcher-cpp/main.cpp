@@ -83,36 +83,23 @@ std::string search_top_k(const std::vector<DriverEmbedding>& pool, const std::ve
     double micros = std::chrono::duration<double, std::micro>(elapsed).count();
 
     std::stringstream ss;
-    ss << "{
-";
-    ss << "  "engine": "Truxify C++20 SIMD Vector Matcher v1.0",
-";
-    ss << "  "total_scanned": " << pool.size() << ",
-";
-    ss << "  "latency_micros": " << micros << ",
-";
-    ss << "  "top_matches": [
-";
+    ss << "{\n";
+    ss << "  \"engine\": \"Truxify C++20 SIMD Vector Matcher v1.0\",\n";
+    ss << "  \"total_scanned\": " << pool.size() << ",\n";
+    ss << "  \"latency_micros\": " << micros << ",\n";
+    ss << "  \"top_matches\": [\n";
 
     int limit = std::min<int>(k, results.size());
     for (int i = 0; i < limit; ++i) {
-        ss << "    {
-";
-        ss << "      "rank": " << (i + 1) << ",
-";
-        ss << "      "driver_id": "" << results[i].driver_id << "",
-";
-        ss << "      "match_score": " << results[i].score << ",
-";
-        ss << "      "latitude": " << results[i].lat << ",
-";
-        ss << "      "longitude": " << results[i].lng << "
-";
-        ss << "    }" << (i < limit - 1 ? "," : "") << "
-";
+        ss << "    {\n";
+        ss << "      \"rank\": " << (i + 1) << ",\n";
+        ss << "      \"driver_id\": \"" << results[i].driver_id << "\",\n";
+        ss << "      \"match_score\": " << results[i].score << ",\n";
+        ss << "      \"latitude\": " << results[i].lat << ",\n";
+        ss << "      \"longitude\": " << results[i].lng << "\n";
+        ss << "    }" << (i < limit - 1 ? "," : "") << "\n";
     }
-    ss << "  ]
-";
+    ss << "  ]\n";
     ss << "}";
 
     return ss.str();
