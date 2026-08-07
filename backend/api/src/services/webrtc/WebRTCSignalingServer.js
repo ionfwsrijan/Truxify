@@ -2,7 +2,7 @@ import { WebSocketServer } from 'ws';
 import crypto from 'crypto';
 import { verifyAuthToken } from '../../middleware/auth.js';
 import logger from '../../middleware/logger.js';
-import { supabase, redisClient } from '../../config/db.js';
+import { supabaseAdmin, redisClient } from '../../config/db.js';
 
 class WebRTCSignalingServer {
   constructor(server) {
@@ -233,7 +233,8 @@ class WebRTCSignalingServer {
     };
 
     try {
-      const { error } = await supabase.from('gps_offline_data').insert([gpsEntry]);
+      if (!supabaseAdmin) return;
+      const { error } = await supabaseAdmin.from('gps_offline_data').insert([gpsEntry]);
       if (error) {
         logger.warn(`Failed to persist WebRTC GPS payload for peer ${peerId}: ${error.message}`);
       }
@@ -403,7 +404,8 @@ class WebRTCSignalingServer {
       logger.warn(`[WebRTC] Unauthorized offline GPS data access attempt for peer ${peerId}`);
       return [];
     }
-    const { data } = await supabase
+    if (!supabaseAdmin) return [];
+    const { data } = await supabaseAdmin
       .from('gps_offline_data')
       .select('*')
       .eq('peerId', peerId)
@@ -419,7 +421,8 @@ class WebRTCSignalingServer {
       return;
     }
     // Mark data as synced for this peer
-    await supabase
+    if (!supabaseAdmin) return;
+    await supabaseAdmin
       .from('gps_offline_data')
       .update({ synced: true })
       .eq('peerId', peerId)

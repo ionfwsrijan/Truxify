@@ -22,9 +22,10 @@ create table if not exists gps_offline_data (
 create index if not exists idx_gps_offline_data_peer_unsynced
   on gps_offline_data (peerId, synced);
 
--- The WebRTC service uses the service/client key; keep rows locked down for
--- any row-level requests.
+-- The WebRTC service uses the service-role admin client (supabaseAdmin) to
+-- persist the GPS backlog; keep rows locked down for any row-level requests.
 alter table gps_offline_data enable row level security;
 
+drop policy if exists gps_offline_data_service_policy on gps_offline_data;
 create policy gps_offline_data_service_policy on gps_offline_data
-  for all using (true) with check (true);
+  for all to service_role using (true) with check (true);

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/config/db.js', () => ({
-  supabase: {},
+  supabaseAdmin: {},
   redisClient: null,
 }));
 
