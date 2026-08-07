@@ -43,6 +43,14 @@ function validateTelemetryPayload(data) {
     if (rules.minLen !== undefined && String(value).length < rules.minLen) errors.push(`${field} is too short`);
     if (rules.maxLen !== undefined && String(value).length > rules.maxLen) errors.push(`${field} exceeds max length ${rules.maxLen}`);
   }
+  const hasLat = data.lat !== undefined && data.lat !== null;
+  const hasLng = data.lng !== undefined && data.lng !== null;
+  const hasLatitude = data.latitude !== undefined && data.latitude !== null;
+  const hasLongitude = data.longitude !== undefined && data.longitude !== null;
+  const hasPair = (hasLat && hasLng) || (hasLatitude && hasLongitude);
+  if (!hasPair) {
+    errors.push('at least one coordinate pair (lat/lng or latitude/longitude) is required');
+  }
   return errors.length > 0 ? errors : null;
 }
 
