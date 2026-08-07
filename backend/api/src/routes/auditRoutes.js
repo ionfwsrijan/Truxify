@@ -182,7 +182,7 @@ const auditQuerySchema = z.object({
  *       403:
  *         description: Admin role required
  */
-router.get('/', authenticate, userLimiter, requirePolicy('admin:view-audit-logs'), validateQuery(auditQuerySchema), async (req, res) => {
+router.get('/', authenticate, requirePolicy('admin:view-audit-logs'), validateQuery(auditQuerySchema), async (req, res) => {
   try {
     const result = await auditLogService.query({
       actorId: req.query.actor_id,
@@ -232,7 +232,7 @@ router.get('/', authenticate, userLimiter, requirePolicy('admin:view-audit-logs'
  *       403:
  *         description: Admin role required
  */
-router.get('/:id', authenticate, userLimiter, requirePolicy('admin:view-audit-logs'), async (req, res) => {
+router.get('/:id', authenticate, requirePolicy('admin:view-audit-logs'), async (req, res) => {
   try {
     if (!supabaseAdmin) {
       return res.status(503).json({ error: 'Admin database client not available.' });

@@ -323,7 +323,7 @@ router.get('/categories', (_req, res) => {
  *       400:
  *         description: Validation error
  */
-router.post('/tickets', authenticate, userLimiter, validateBody(createTicketSchema), async (req, res) => {
+router.post('/tickets', authenticate, validateBody(createTicketSchema), async (req, res) => {
   const subject = normalizeRequiredText(req.body.subject);
   const category = normalizeRequiredText(req.body.category);
   const description = normalizeRequiredText(req.body.description) || subject;
@@ -405,7 +405,7 @@ router.post('/tickets', authenticate, userLimiter, validateBody(createTicketSche
  *             schema:
  *               $ref: '#/components/schemas/TicketListResponse'
  */
-router.get('/tickets', authenticate, userLimiter, async (req, res) => {
+router.get('/tickets', authenticate, async (req, res) => {
   const { status, category, page = '1', limit = '20' } = req.query;
   const parsedPage = parsePositiveInteger(page, 1, 'page');
   if (parsedPage.error) {
@@ -501,7 +501,7 @@ router.get('/tickets', authenticate, userLimiter, async (req, res) => {
  *       404:
  *         description: Ticket not found
  */
-router.get('/tickets/:id', authenticate, userLimiter, requirePolicy('ticket:view', async (req) => {
+router.get('/tickets/:id', authenticate, requirePolicy('ticket:view', async (req) => {
   const { data: ticket } = await supabase
     .from('support_tickets')
     .select('id, user_id')
@@ -574,7 +574,7 @@ router.get('/tickets/:id', authenticate, userLimiter, requirePolicy('ticket:view
  *       404:
  *         description: Ticket not found
  */
-router.patch('/tickets/:id', authenticate, userLimiter, requirePolicy('ticket:update', async (req) => {
+router.patch('/tickets/:id', authenticate, requirePolicy('ticket:update', async (req) => {
   const { data: ticket } = await supabase
     .from('support_tickets')
     .select('id, user_id, status')
@@ -723,7 +723,7 @@ router.patch('/tickets/:id', authenticate, userLimiter, requirePolicy('ticket:up
  *       403:
  *         description: Admin role required
  */
-router.get('/admin/tickets', authenticate, userLimiter, requirePolicy('ticket:admin-view-all'), auditLog({ action: 'ticket:admin-view-all' }), async (req, res) => {
+router.get('/admin/tickets', authenticate, requirePolicy('ticket:admin-view-all'), auditLog({ action: 'ticket:admin-view-all' }), async (req, res) => {
   const { status, category, user_id, page = '1', limit = '20' } = req.query;
   const parsedPage = parsePositiveInteger(page, 1, 'page');
   if (parsedPage.error) {
@@ -845,7 +845,7 @@ router.get('/admin/tickets', authenticate, userLimiter, requirePolicy('ticket:ad
  * @returns {object} 409 - Cannot comment on a closed ticket
  * @returns {object} 500 - Internal server error
  */
-router.post('/tickets/:id/comments', authenticate, userLimiter, requirePolicy('ticket:add-comment', async (req) => {
+router.post('/tickets/:id/comments', authenticate, requirePolicy('ticket:add-comment', async (req) => {
   const { data: ticket } = await supabase
     .from('support_tickets')
     .select('id, user_id, status')
@@ -949,7 +949,7 @@ router.post('/tickets/:id/comments', authenticate, userLimiter, requirePolicy('t
  *       404:
  *         description: Ticket not found
  */
-router.get('/tickets/:id/comments', authenticate, userLimiter, requirePolicy('ticket:view-comments', async (req) => {
+router.get('/tickets/:id/comments', authenticate, requirePolicy('ticket:view-comments', async (req) => {
   const { data: ticket } = await supabase
     .from('support_tickets')
     .select('id, user_id')
