@@ -65,9 +65,9 @@ std::string compute_matrix_json(double dist_base_km) {
 
     std::stringstream ss;
     ss << "{\n";
-    ss << "  "success": true,\n";
-    ss << "  "engine": "Truxify C++ SIMD Matrix Solver v1.0",\n";
-    ss << "  "matrix": [\n";
+    ss << "  \"success\": true,\n";
+    ss << "  \"engine\": \"Truxify C++ SIMD Matrix Solver v1.0\",\n";
+    ss << "  \"matrix\": [\n";
 
     // Simulate 5x5 distance matrix computation
     std::vector<Location> locs = {
@@ -89,11 +89,11 @@ std::string compute_matrix_json(double dist_base_km) {
             double cost = dist * 12.5;              // 12.5 INR / km tariff
 
             ss << "    {\n";
-            ss << "      "origin": "" << locs[i].id << "",\n";
-            ss << "      "destination": "" << locs[j].id << "",\n";
-            ss << "      "distance_km": " << dist << ",\n";
-            ss << "      "duration_mins": " << duration << ",\n";
-            ss << "      "tariff_inr": " << cost << "\n";
+            ss << "      \"origin\": \"" << locs[i].id << "\",\n";
+            ss << "      \"destination\": \"" << locs[j].id << "\",\n";
+            ss << "      \"distance_km\": " << dist << ",\n";
+            ss << "      \"duration_mins\": " << duration << ",\n";
+            ss << "      \"tariff_inr\": " << cost << "\n";
             ss << "    }";
         }
     }
@@ -102,7 +102,7 @@ std::string compute_matrix_json(double dist_base_km) {
     double compute_us = std::chrono::duration<double, std::micro>(end_time - start_time).count();
 
     ss << "\n  ],\n";
-    ss << "  "compute_time_us": " << compute_us << "\n";
+    ss << "  \"compute_time_us\": " << compute_us << "\n";
     ss << "}";
 
     return ss.str();
