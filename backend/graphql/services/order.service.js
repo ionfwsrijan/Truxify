@@ -8,6 +8,7 @@ import { generateOrderDisplayId } from '../../api/src/lib/orderDisplayId.js';
 import { createLoaders } from '../gateway/authContext.js';
 
 const ADMIN_ROLES = new Set(['ADMIN', 'admin']);
+const STATUS_CHANGE_ROLES = new Set(['ADMIN', 'admin', 'DISPATCHER', 'dispatcher']);
 
 function requireUser(user) {
     if (!user?.id) {
@@ -18,6 +19,10 @@ function requireUser(user) {
 
 function isAdmin(user) {
     return ADMIN_ROLES.has(user?.role);
+}
+
+function canChangeStatus(user) {
+    return STATUS_CHANGE_ROLES.has(user?.role);
 }
 
 function mapOrder(row) {
@@ -232,8 +237,13 @@ const resolvers = {
         },
         updateOrder: async (_, { id, input }, { user }) => {
             const currentUser = requireUser(user);
+
+            if (input.status && !canChangeStatus(currentUser)) {
+                throw new Error('Order status changes require ADMIN or DISPATCHER role; use cancelOrder to cancel');
+            }
+
             const updates = {
-                status: toDbStatus(input.status),
+                status: input.status ? toDbStatus(input.status) : undefined,
                 pickup_address: input.pickup?.address ?? undefined,
                 pickup_lat: input.pickup?.lat ?? undefined,
                 pickup_lng: input.pickup?.lng ?? undefined,
