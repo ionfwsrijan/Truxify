@@ -4,6 +4,7 @@ import { buildSubgraphSchema } from '@apollo/federation';
 import { gql } from 'graphql-tag';
 import { supabase } from '../../api/src/config/db.js';
 import logger from '../../api/src/middleware/logger.js';
+import { buildSubgraphContext } from './subgraphContext.js';
 
 const DISPATCH_ROLES = new Set(['ADMIN', 'admin', 'DISPATCHER', 'dispatcher']);
 
@@ -94,7 +95,7 @@ const typeDefs = gql`
 
 const resolvers = {
     Query: {
-        driver: async (_, { id }) => {
+        driver: async (_, { id }, { supabase }) => {
             const { data, error } = await supabase
                 .from('drivers')
                 .select('*')
@@ -104,7 +105,7 @@ const resolvers = {
             if (error) throw error;
             return mapDriver(data);
         },
-        drivers: async (_, { available, location }) => {
+        drivers: async (_, { available, location }, { supabase }) => {
             let query = supabase.from('drivers').select('*');
             
             if (available !== undefined) {
@@ -123,7 +124,7 @@ const resolvers = {
             if (error) throw error;
             return data.map(mapDriver);
         },
-        nearbyDrivers: async (_, { lat, lng, radius = 10 }) => {
+        nearbyDrivers: async (_, { lat, lng, radius = 10 }, { supabase }) => {
             const { data, error } = await supabase
                 .from('drivers')
                 .select('*')
@@ -138,7 +139,7 @@ const resolvers = {
         }
     },
     Mutation: {
-        updateDriver: async (_, { id, input }, { user }) => {
+        updateDriver: async (_, { id, input }, { user, supabase }) => {
             const currentUser = requireUser(user);
             let query = supabase
                 .from('drivers')
@@ -160,7 +161,7 @@ const resolvers = {
             if (error) throw error;
             return mapDriver(data);
         },
-        assignDriver: async (_, { orderId, driverId }, { user }) => {
+        assignDriver: async (_, { orderId, driverId }, { user, supabase }) => {
             const currentUser = requireUser(user);
             if (!canDispatch(currentUser)) {
                 throw new Error('Dispatcher role required');
@@ -180,7 +181,7 @@ const resolvers = {
             if (error) throw error;
             return data;
         },
-        updateDriverLocation: async (_, { id, location }, { user }) => {
+        updateDriverLocation: async (_, { id, location }, { user, supabase }) => {
             const currentUser = requireUser(user);
             let query = supabase
                 .from('drivers')
@@ -209,7 +210,8 @@ async function startDriverService() {
     });
 
     const { url } = await startStandaloneServer(server, {
-        listen: { port: 4002 }
+        listen: { port: 4002 },
+        context: buildSubgraphContext
     });
 
     logger.info(`âœ… Driver GraphQL service running at ${url}`);

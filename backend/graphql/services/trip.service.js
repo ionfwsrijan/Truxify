@@ -5,6 +5,7 @@ import { gql } from 'graphql-tag';
 import DataLoader from 'dataloader';
 import { supabase } from '../../api/src/config/db.js';
 import logger from '../../api/src/middleware/logger.js';
+import { buildSubgraphContext } from './subgraphContext.js';
 
 const typeDefs = gql`
     extend type Query {
@@ -35,7 +36,7 @@ const typeDefs = gql`
 
 const resolvers = {
     Query: {
-        logisticsRoute: async (_, { id }) => {
+        logisticsRoute: async (_, { id }, { supabase }) => {
             const { data, error } = await supabase.from('trips').select('*').eq('id', id).single();
             if (error) throw error;
             return {
@@ -46,7 +47,7 @@ const resolvers = {
                 routeLabel: data.route_label,
             };
         },
-        logisticsRoutes: async (_, { limit = 50, offset = 0 }) => {
+        logisticsRoutes: async (_, { limit = 50, offset = 0 }, { supabase }) => {
             const { data, error } = await supabase.from('trips').select('*').range(offset, offset + limit - 1);
             if (error) throw error;
             return data.map(row => ({
@@ -67,8 +68,8 @@ const resolvers = {
 };
 
 // Batch function for DataLoader
-const batchCheckpoints = async (tripDisplayIds) => {
-    const { data, error } = await supabase
+const batchCheckpoints = async (tripDisplayIds, client = supabase) => {
+    const { data, error } = await client
         .from('route_map_points')
         .select('*')
         .in('trip_display_id', tripDisplayIds);
@@ -107,9 +108,11 @@ async function startLogisticsService() {
 
     const { url } = await startStandaloneServer(server, {
         listen: { port: 4004 },
-        context: async () => {
+        context: async ({ req }) => {
+            const context = buildSubgraphContext({ req });
             return {
-                checkpointLoader: new DataLoader(keys => batchCheckpoints(keys))
+                ...context,
+                checkpointLoader: new DataLoader(keys => batchCheckpoints(keys, context.supabase))
             };
         }
     });

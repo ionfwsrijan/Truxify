@@ -6,6 +6,7 @@ import { supabase } from '../../api/src/config/db.js';
 import logger from '../../api/src/middleware/logger.js';
 import { generateOrderDisplayId } from '../../api/src/lib/orderDisplayId.js';
 import { createLoaders } from '../gateway/authContext.js';
+import { buildSubgraphContext } from './subgraphContext.js';
 
 const ADMIN_ROLES = new Set(['ADMIN', 'admin']);
 
@@ -149,7 +150,7 @@ const typeDefs = gql`
 
 const resolvers = {
     Query: {
-        order: async (_, { id }, { user }) => {
+        order: async (_, { id }, { user, supabase }) => {
             const currentUser = requireUser(user);
 
             // Fetch order from database
@@ -167,7 +168,7 @@ const resolvers = {
             if (error) throw error;
             return mapOrder(data);
         },
-        orders: async (_, { status, limit = 10, offset = 0 }, { user }) => {
+        orders: async (_, { status, limit = 10, offset = 0 }, { user, supabase }) => {
             const currentUser = requireUser(user);
 
             let query = supabase
@@ -187,7 +188,7 @@ const resolvers = {
             if (error) throw error;
             return data.map(mapOrder);
         },
-        ordersByCustomer: async (_, { customerId }, { user }) => {
+        ordersByCustomer: async (_, { customerId }, { user, supabase }) => {
             const currentUser = requireUser(user);
             const scopedCustomerId = isAdmin(currentUser) ? customerId : currentUser.id;
 
@@ -202,7 +203,7 @@ const resolvers = {
         }
     },
     Mutation: {
-        createOrder: async (_, { input }, { user }) => {
+        createOrder: async (_, { input }, { user, supabase }) => {
             const currentUser = requireUser(user);
             const customerId = isAdmin(currentUser) ? input.customerId : currentUser.id;
 
@@ -230,7 +231,7 @@ const resolvers = {
             if (error) throw error;
             return mapOrder(data);
         },
-        updateOrder: async (_, { id, input }, { user }) => {
+        updateOrder: async (_, { id, input }, { user, supabase }) => {
             const currentUser = requireUser(user);
             const updates = {
                 status: toDbStatus(input.status),
@@ -261,7 +262,7 @@ const resolvers = {
             if (error) throw error;
             return mapOrder(data);
         },
-        cancelOrder: async (_, { id, reason }, { user }) => {
+        cancelOrder: async (_, { id, reason }, { user, supabase }) => {
             const currentUser = requireUser(user);
             let query = supabase
                 .from('orders')
@@ -289,8 +290,9 @@ const resolvers = {
             return { id: order.driverId };
         },
         payment: async (order, _, context) => {
+            const client = context.supabase || supabase;
             if (!context.loaders) {
-                const { data, error } = await supabase
+                const { data, error } = await client
                     .from('payments')
                     .select('*')
                     .eq('order_id', order.id)
@@ -302,8 +304,9 @@ const resolvers = {
             return context.loaders.paymentLoader.load(order.id);
         },
         trip: async (order, _, context) => {
+            const client = context.supabase || supabase;
             if (!context.loaders) {
-                const { data, error } = await supabase
+                const { data, error } = await client
                     .from('trips')
                     .select('*')
                     .eq('order_id', order.id)
@@ -326,13 +329,11 @@ async function startOrderService() {
     const { url } = await startStandaloneServer(server, {
         listen: { port: 4001 },
         context: async ({ req }) => {
-            const id = req.headers['x-user-id'];
-            const role = req.headers['x-user-role'];
-            const user = id ? { id, role } : null;
-            
+            const context = buildSubgraphContext({ req });
+
             return {
-                user,
-                loaders: createLoaders(supabase)
+                ...context,
+                loaders: createLoaders(context.supabase)
             };
         }
     });
