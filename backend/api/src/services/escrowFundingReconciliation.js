@@ -53,6 +53,48 @@ async function finalizeOrRevert(order, orderRepository) {
     }
 
     if (bookingFunded && !mismatchReason) {
+      // The order was cancelled while the deposit was still in flight and the
+      // deposit DID land on-chain. Accepting the bid on a cancelled order is
+      // invalid, so refund the booking instead — otherwise the funds stay
+      // locked with no automated recovery path.
+      if (order.status === 'cancelled') {
+        let refundError = null;
+        let refundTxHash = null;
+        try {
+          const submitted = await submitEscrowRefund(order.order_display_id);
+          refundTxHash = submitted?.txHash ?? null;
+          if (!refundTxHash || !submitted?.waitForConfirmation) {
+            refundError = submitted?.error || 'Escrow refund was not submitted on-chain.';
+          }
+        } catch (err) {
+          refundError = err.message;
+          logger.error(`[escrow-funding] Refund of cancelled order ${order.order_display_id} failed: ${err.message}`);
+        }
+
+        const { error: refundUpdateErr } = await orderRepository.updateOrderWithFilter(order.id, {
+          escrow_status: refundError ? 'refund_failed' : 'refund_pending',
+          refund_tx_hash: refundTxHash,
+          escrow_refund_error: refundError,
+          pending_bid_acceptance: null,
+          escrow_funding_attempts: 0,
+          escrow_funding_last_attempt_at: null,
+        }, [{ op: 'eq', column: 'escrow_status', value: 'funding' }], 'id');
+
+        if (refundUpdateErr) {
+          logger.error(`[escrow-funding] Failed to record refund state for cancelled order ${order.order_display_id}: ${refundUpdateErr.message}`);
+        } else {
+          sendPushNotification(
+            order.customer_id,
+            'Deposit Refunded',
+            `The escrow deposit for cancelled order ${order.order_display_id} has been refunded.`,
+            'order_update',
+            { orderId: order.id }
+          ).catch((err) => logger.error(`[FCM] Failed to notify customer of refund: ${err.message}`));
+          logger.info(`[escrow-funding] Cancelled order ${order.order_display_id} deposit refunded (booking was funded on-chain).`);
+        }
+        return;
+      }
+
       // The deposit DID land on-chain with the correct amount. Heal the
       // acceptance by running accept_bid_tx as the backend (service_role).
       const pending = order.pending_bid_acceptance;
@@ -108,6 +150,33 @@ async function finalizeOrRevert(order, orderRepository) {
     } catch (err) {
       refundError = err.message;
       logger.error(`[escrow-funding] Refund failed for ${order.order_display_id}: ${err.message}`);
+    }
+
+    // If the order was cancelled while the deposit was in flight and no
+    // deposit ever landed on-chain, do not resurrect it back to 'pending'
+    // (which would let the customer accept a bid again). Clear the funding
+    // bookkeeping and leave the order cancelled.
+    if (order.status === 'cancelled') {
+      const { error: cleanupErr } = await orderRepository.updateOrderWithFilter(order.id, {
+        pending_bid_acceptance: null,
+        escrow_booking_id: null,
+        escrow_funding_attempts: 0,
+        escrow_funding_last_attempt_at: null,
+        escrow_funding_error: mismatchReason
+          ? `ESCROW_AMOUNT_MISMATCH: ${mismatchReason}`
+          : (refundError ? `refund failed: ${refundError}` : null),
+        updated_at: new Date().toISOString(),
+      }, [
+        { op: 'eq', column: 'escrow_status', value: 'funding' },
+        { op: 'eq', column: 'id', value: order.id },
+      ], 'id');
+
+      if (cleanupErr) {
+        logger.error(`[escrow-funding] Failed to clean up cancelled order ${order.order_display_id}: ${cleanupErr.message}`);
+      } else {
+        logger.info(`[escrow-funding] Cancelled order ${order.order_display_id} funding cleaned up (no on-chain deposit to refund).`);
+      }
+      return;
     }
 
     const { error: revertErr } = await orderRepository.updateOrderWithFilter(order.id, {

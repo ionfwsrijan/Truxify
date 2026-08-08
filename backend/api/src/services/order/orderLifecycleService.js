@@ -3,13 +3,14 @@ import { DeliveryVerificationService } from './deliveryVerificationService.js';
 import { expireDeliveryOtps, sendPushNotification } from '../notificationService.js';
 import { acquireLock, releaseLock } from '../../lib/redisLock.js';
 import { measureExecution } from '../../core/performanceMetrics.js';
-import { supabaseAdmin } from '../../config/db.js';
+import { supabaseAdmin, supabase } from '../../config/db.js';
 import {
   submitEscrowRefund,
   recordDepositTx,
   submitEscrowCancelWithPenalty,
   confirmEscrowRefund,
   getEscrowBookingId,
+  getEscrowBooking,
   resolveExpectedDepositAmount,
   paisaToMaticWei,
 } from '../escrow.js';
@@ -580,7 +581,6 @@ export class OrderLifecycleService {
         // total_amount using the same canonical paisa→wei conversion the rest
         // of the escrow pipeline uses.
         const newAmountWei = paisaToMaticWei(pricing.totalAmount);
-        const newAmountWei = BigInt(paisaToMaticWei(pricing.totalAmount));
 
         const updates = {
           drop_address,
@@ -679,7 +679,23 @@ export class OrderLifecycleService {
           throw new DomainError(409, { error: 'Cannot cancel: the shipment has already been picked up and is in transit.' });
         }
 
-        const requiresRefund = ['funded', 'refund_pending', 'refund_failed'].includes(currentOrder.escrow_status);
+        // A deposit that is still in flight ('funding') may have already landed
+        // on-chain by the time the cancel wins the race. Check the live booking
+        // state: if it is funded, a refund is required — otherwise the deposit
+        // would be stranded with no automated recovery. An unfunded booking is
+        // left to the stale-funding reconciler, which refunds it if the deposit
+        // lands after cancellation.
+        const refundStates = ['funded', 'refund_pending', 'refund_failed'];
+        let requiresRefund = refundStates.includes(currentOrder.escrow_status);
+        if (
+          !requiresRefund &&
+          currentOrder.escrow_status === 'funding' &&
+          currentOrder.escrow_booking_id
+        ) {
+          const booking = await getEscrowBooking(currentOrder.escrow_booking_id);
+          const bookingAmount = booking?.amount;
+          requiresRefund = !!booking && bookingAmount != null && bookingAmount > 0n;
+        }
         const penaltyBps = currentOrder.status === 'truck_assigned'
           ? 1000
           : ['arrived_pickup', 'picked_up', 'in_transit', 'delivered'].includes(currentOrder.status)
@@ -1035,7 +1051,7 @@ async function createOrderTransactional({ idempotencyKey, orderData, timelineDat
   }
 
   try {
-    const { data, error } = await db.rpc('create_order_tx', {
+    const { data, error } = await (supabaseAdmin ?? supabase).rpc('create_order_tx', {
       p_idempotency_key: idempotencyKey,
       p_order_data: orderData,
       p_timeline_data: timelineData || { status: 'created', details: { note: 'Order initialized' } },

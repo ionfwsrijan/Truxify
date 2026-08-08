@@ -155,8 +155,6 @@ export class OrderRepository {
             query = query.not(f.column, f.operator, f.value);
           } else if (f.op === 'in') {
             query = query.in(f.column, f.value);
-          } else if (f.op === 'neq') {
-            query = query.not(f.column, 'neq', f.value);
           }
         }
       }
@@ -590,7 +588,7 @@ export class OrderRepository {
   async findStaleFundingOrders(cutoff) {
     return this._retryableQuery(() => this.supabase
       .from('orders')
-      .select('id, order_display_id, customer_id, escrow_booking_id, escrow_amount_wei, pending_bid_acceptance, escrow_funding_attempts, escrow_funding_last_attempt_at')
+      .select('id, order_display_id, customer_id, status, escrow_booking_id, escrow_amount_wei, pending_bid_acceptance, escrow_funding_attempts, escrow_funding_last_attempt_at')
       .eq('escrow_status', 'funding')
       .not('pending_bid_acceptance', 'is', null)
       .or(`escrow_funding_started_at.lt.${cutoff},and(escrow_funding_started_at.is.null,updated_at.lt.${cutoff})`), 'findStaleFundingOrders');
