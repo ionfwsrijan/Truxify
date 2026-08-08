@@ -606,7 +606,10 @@ export async function matchEnRouteLoads({
         length_m: dims.length,
         width_m: dims.width,
         height_m: dims.height,
-        pickup_deadline: new Date(Date.now() + ML_DEFAULT_PICKUP_LEAD_MS).toISOString(),
+        // Prefer the order's real pickup deadline when the load carries one;
+        // otherwise fall back to the default lead so the ML feasibility check
+        // (estimated_arrival <= deadline) still has room for reachable loads.
+        pickup_deadline: o.pickup_deadline || new Date(Date.now() + ML_DEFAULT_PICKUP_LEAD_MS).toISOString(),
         payment_inr: Number(o.payment_inr || (o.freight_value ? o.freight_value / 100 : 0)),
       };
     })
@@ -628,7 +631,9 @@ export async function matchEnRouteLoads({
       const result = await matchDeadhead({
         driverDestination: { lat: currentLat, lng: currentLng },
         truckSpecs: specs,
-        arrivalTime: new Date(Date.now() + ML_DEFAULT_PICKUP_LEAD_MS).toISOString(),
+        // The driver is at currentLat/currentLng right now, so their arrival
+        // time at the pickup is the current instant — not now + 8h.
+        arrivalTime: new Date().toISOString(),
         availableLoads,
       });
       recommendations = result.recommendations || [];
@@ -638,8 +643,10 @@ export async function matchEnRouteLoads({
     }
   }
 
-  // Haversine fallback — score by distance to pickup
-  if (!mlUsed) {
+  // Haversine fallback — score by distance to pickup. Runs whenever the ML
+  // engine is unavailable OR returned no recommendations, so an empty ML
+  // result never silently blanks the en-route offer list.
+  if (!mlUsed || recommendations.length === 0) {
     recommendations = offers
       .filter(o => o.pickup_lat && o.pickup_lng)
       .map(o => {
