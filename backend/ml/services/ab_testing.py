@@ -25,14 +25,15 @@ class ABTestMetrics(Base):
 
 class ABTestModel:
     """A/B Testing with shadow deployment and auto-rollback"""
-    
-    def __init__(self, db_url: str, threshold: float = 0.95):
+
+    def __init__(self, db_url: str, threshold: float = 0.95, min_improvement_pct: float = 1.0):
         self.engine = create_engine(db_url)
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
         self.threshold = threshold  # If new model < threshold% of old, rollback
+        self.min_improvement_pct = min_improvement_pct  # Minimum % gain before promoting
         self.traffic_split = 0.10  # 10% to new model
-        
+
     def get_model_for_request(self, request_id: str) -> Dict[str, Any]:
         """Route request to production or shadow model based on A/B split"""
         
@@ -135,16 +136,15 @@ class ABTestModel:
         if prod_value == 0:
             if shadow_value == 0:
                 return 0.0
+            scale = max(abs(shadow_value), abs(prod_value))
             diff = shadow_value - prod_value
-            pct = diff * 100.0
+            pct = (diff / scale) * 100.0
             return pct if higher_is_better else -pct
 
         diff = shadow_value - prod_value
         pct = (diff / abs(prod_value)) * 100.0
         return pct if higher_is_better else -pct
 
-    
-    
     def is_shadow_better(self, results: Dict) -> bool:
         """Determine if shadow model outperforms production based on metric direction and threshold."""
         better_count = 0
@@ -161,13 +161,13 @@ class ABTestModel:
             total_metrics += 1
             metric_lower = metric.lower()
             is_lower_better = any(k in metric_lower for k in lower_is_better_keywords)
+            higher_is_better = not is_lower_better
 
-            if is_lower_better:
-                if shadow < prod * self.threshold:
-                    better_count += 1
-            else:
-                if shadow > prod * self.threshold:
-                    better_count += 1
+            # Skip metrics whose improvement is below the promotion threshold.
+            if self.calculate_improvement(prod, shadow, higher_is_better) < self.min_improvement_pct:
+                continue
+
+            better_count += 1
 
         return better_count > (total_metrics / 2) if total_metrics > 0 else False
 
