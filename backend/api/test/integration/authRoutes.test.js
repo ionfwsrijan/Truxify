@@ -77,6 +77,7 @@ describe('POST /api/auth/logout', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.message).toBe('Logged out successfully');
+    expect(res.body.cacheInvalidated).toBe(true);
   });
 
   it('returns 401 for unauthenticated request', async () => {
@@ -125,6 +126,7 @@ describe('POST /api/auth/logout', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+    expect(res.body.cacheInvalidated).toBe(false);
   });
 
   it('returns 200 even when Firebase revocation fails', async () => {
