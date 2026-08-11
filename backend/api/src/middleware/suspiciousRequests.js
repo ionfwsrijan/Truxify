@@ -6,10 +6,16 @@ const SQLI_PATTERNS = [
   /insert\s+into/i,
   /delete\s+from/i,
   /or\s+1=1/i,
-  // Match -- only when it appears in a SQL comment context: preceded by
-  // whitespace, a quote, a closing paren, or a semicolon — not when
-  // embedded mid-word (e.g. date ranges like 2026-01-01--2026-02-01,
-  // negative numbers, or note fields containing "--").
+];
+
+// SQL comment markers (`--`) are detected but only warn, never block. Because
+// the body/query are JSON-stringified, every key and string value is wrapped
+// in quotes, so a `--` that follows a space, quote, closing paren, or
+// semicolon inside *any* string value matches (e.g. "Main St -- Building C",
+// "?q=--foo"). Hard-blocking on it produces false-positive 403s for
+// legitimate traffic while offering no real protection over the keyword
+// patterns above.
+const SQL_COMMENT_MARKERS = [
   /(?:^|[\s'");])--/,
 ];
 
@@ -47,6 +53,8 @@ export default function suspiciousRequests(req, res, next) {
 
   if (matches(SQLI_PATTERNS, body) || matches(SQLI_PATTERNS, query))
     findings.push("SQL Injection");
+  else if (matches(SQL_COMMENT_MARKERS, body) || matches(SQL_COMMENT_MARKERS, query))
+    findings.push("SQL Comment Marker");
 
   if (matches(XSS_PATTERNS, body) || matches(XSS_PATTERNS, query))
     findings.push("Cross-Site Scripting");
