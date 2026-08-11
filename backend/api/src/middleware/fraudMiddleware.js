@@ -8,7 +8,11 @@ export const fraudDetectionMiddleware = async (req, res, next) => {
   try {
     const userId = req.user?.id;
 
+    // Must match the real Express mounts in src/index.js. The trips router is
+    // mounted at /api/v1/trips (with this middleware); /api/trips is a second
+    // bare mount without the middleware, kept here only for defensive matching.
     const criticalEndpoints = [
+      '/api/v1/trips',
       '/api/orders',
       '/api/payments',
       '/api/escrow',

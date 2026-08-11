@@ -62,6 +62,24 @@ describe('fraudMiddleware', () => {
       expect(next).not.toHaveBeenCalled();
     });
 
+    it('blocks high-risk requests on the /api/v1/trips mount', async () => {
+      fraudMock.getRealTimeRisk.mockResolvedValue({ riskScore: 0.95, riskLevel: 'HIGH' });
+      const { req, res, next } = makeReqRes({ originalUrl: '/api/v1/trips/active' });
+      await fraudDetectionMiddleware(req, res, next);
+      expect(fraudMock.getRealTimeRisk).toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('sets risk info on critical endpoints for downstream use', async () => {
+      fraudMock.getRealTimeRisk.mockResolvedValue({ riskScore: 0.75, riskLevel: 'HIGH' });
+      const { req, res, next } = makeReqRes({ originalUrl: '/api/v1/trips/active' });
+      await fraudDetectionMiddleware(req, res, next);
+      expect(req.riskScore).toBe(0.75);
+      expect(req.riskLevel).toBe('HIGH');
+      expect(next).toHaveBeenCalled();
+    });
+
     it('fails closed with 503 on service errors', async () => {
       fraudMock.trackBehavior.mockRejectedValue(new Error('down'));
       const { req, res, next } = makeReqRes({ originalUrl: '/api/orders' });
