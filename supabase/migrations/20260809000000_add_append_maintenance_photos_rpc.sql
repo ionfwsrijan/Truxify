@@ -20,13 +20,6 @@ DECLARE
   v_existing  TEXT[];
   v_driver_id UUID;
 BEGIN
-  -- The controller checks ownership before uploading, but re-verify inside the
-  -- RPC so the row lock + write can only be performed on a ticket the caller
-  -- actually owns (auth.uid() is NULL for unauthenticated calls).
-  IF auth.uid() IS NULL THEN
-    RAISE EXCEPTION 'Unauthorized';
-  END IF;
-
   SELECT photo_urls, driver_id
     INTO v_existing, v_driver_id
     FROM truck_maintenance_tickets
@@ -37,7 +30,14 @@ BEGIN
     RAISE EXCEPTION 'Maintenance ticket not found';
   END IF;
 
-  IF v_driver_id <> auth.uid() THEN
+  -- The controller checks ownership before uploading, but re-verify inside the
+  -- RPC so the row lock + write can only be performed on a ticket the caller
+  -- actually owns. get_profile_id() maps the Firebase JWT sub to profiles.id,
+  -- which is what truck_maintenance_tickets.driver_id actually stores
+  -- (auth.uid() is the Firebase UID and would never match). auth.uid() is NULL
+  -- for unauthenticated calls, and NULL <> x is NULL (not TRUE), so this must
+  -- be a null-safe check to actually block them.
+  IF auth.uid() IS NULL OR get_profile_id() <> v_driver_id THEN
     RAISE EXCEPTION 'Unauthorized: you can only add photos to your own tickets';
   END IF;
 
