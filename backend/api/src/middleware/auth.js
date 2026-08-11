@@ -467,7 +467,14 @@ export async function authenticate(req, res, next) {
     // Populate cache on successful DB fetch
     if (userProfile.firebase_uid) {
       try {
-        await setCachedProfile(userProfile.firebase_uid, req.user);
+        // Clamp the cache lifetime to the token's remaining validity so a cached
+        // profile can never outlive the access token that authorised it.
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const ttlSeconds =
+          !isSupabaseToken && Number.isFinite(decoded?.exp)
+            ? Math.min(TTL_SECONDS, Math.max(1, decoded.exp - nowSeconds))
+            : TTL_SECONDS;
+        await setCachedProfile(userProfile.firebase_uid, req.user, ttlSeconds);
       } catch (err) {
         logger.error({ err }, "Cache set failed");
       }
