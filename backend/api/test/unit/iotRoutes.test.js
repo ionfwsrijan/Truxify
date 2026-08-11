@@ -215,6 +215,85 @@ describe('iotRoutes', () => {
     expect(anonFrom).not.toHaveBeenCalled();
   });
 
+  it('POST /api/iot/telemetry/:id allows a provisioned iot_device matching load_offers.device_id', async () => {
+    const load = { requires_refrigeration: true, target_temperature_min: 0, target_temperature_max: 10, customer_id: 'cust-1', device_id: 'device-1' };
+    adminFrom.mockImplementation((table) => {
+      if (table === 'load_offers') return maybeSingleChain({ data: load, error: null });
+      if (table === 'temperature_telemetry') return insertStub();
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const res = await request(buildApp())
+      .post('/api/iot/telemetry/load-1')
+      .set('x-user-id', 'device-1')
+      .set('x-user-role', 'iot_device')
+      .send({ temperature: 5 });
+
+    expect(res.status).toBe(201);
+    expect(adminFrom).toHaveBeenCalledWith('temperature_telemetry');
+    expect(anonFrom).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/iot/telemetry/:id denies an iot_device not mapped to the load', async () => {
+    const load = { requires_refrigeration: true, target_temperature_min: 0, target_temperature_max: 10, customer_id: 'cust-1', device_id: 'device-1' };
+    adminFrom.mockImplementation((table) => {
+      if (table === 'load_offers') return maybeSingleChain({ data: load, error: null });
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const res = await request(buildApp())
+      .post('/api/iot/telemetry/load-1')
+      .set('x-user-id', 'device-other')
+      .set('x-user-role', 'iot_device')
+      .send({ temperature: 5 });
+
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /api/iot/telemetry/:id allows a provisioned iot_device to read its own history', async () => {
+    const load = { customer_id: 'cust-1', order_display_id: 'OD-1', device_id: 'device-1' };
+    const telemetry = [{ load_id: 'load-1', temperature: 5 }];
+    adminFrom.mockImplementation((table) => {
+      if (table === 'load_offers') return maybeSingleChain({ data: load, error: null });
+      if (table === 'temperature_telemetry') {
+        const chain = {
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          order: vi.fn(() => chain),
+          limit: vi.fn(() => chain),
+          then(resolve) { return Promise.resolve(resolve({ data: telemetry, error: null })); },
+        };
+        return chain;
+      }
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const res = await request(buildApp())
+      .get('/api/iot/telemetry/load-1')
+      .set('x-user-id', 'device-1')
+      .set('x-user-role', 'iot_device');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(telemetry);
+    expect(adminFrom).toHaveBeenCalledWith('temperature_telemetry');
+    expect(anonFrom).not.toHaveBeenCalled();
+  });
+
+  it('GET /api/iot/telemetry/:id denies an iot_device not mapped to the load', async () => {
+    const load = { customer_id: 'cust-1', order_display_id: 'OD-1', device_id: 'device-1' };
+    adminFrom.mockImplementation((table) => {
+      if (table === 'load_offers') return maybeSingleChain({ data: load, error: null });
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const res = await request(buildApp())
+      .get('/api/iot/telemetry/load-1')
+      .set('x-user-id', 'device-other')
+      .set('x-user-role', 'iot_device');
+
+    expect(res.status).toBe(403);
+  });
+
   it('GET /api/iot/telemetry/:id authorizes the assigned driver for arrived_pickup/arriving/delivered statuses', async () => {
     const load = { customer_id: 'cust-1', order_display_id: 'OD-1' };
     const telemetry = [{ load_id: 'load-1', temperature: 5 }];

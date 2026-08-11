@@ -42,7 +42,7 @@ router.post('/telemetry/:id', telemetryHistoryLimiter, authenticate, validatePar
     // service-role client; ownership is enforced below against req.user.
     const { data: load, error: loadErr } = await supabaseAdmin
       .from('load_offers')
-      .select('requires_refrigeration, target_temperature_min, target_temperature_max, customer_id, order_display_id')
+      .select('requires_refrigeration, target_temperature_min, target_temperature_max, customer_id, order_display_id, device_id')
       .eq('id', loadId)
       .maybeSingle();
 
@@ -60,15 +60,17 @@ router.post('/telemetry/:id', telemetryHistoryLimiter, authenticate, validatePar
     }
 
     // Admins may always ingest telemetry.
-    // Provisioned IoT devices may ingest telemetry if they map to this specific load.
-    // Everyone else must mirror GET authorization: the load owner OR the
-    // assigned driver. The driver is the party physically carrying the load
-    // and the only person able to record cold-chain readings in transit.
+    // Provisioned IoT devices may ingest telemetry for the load they are
+    // provisioned to: load_offers.device_id holds the device's profiles.id
+    // (the same space as req.user.id). Everyone else must mirror GET
+    // authorization: the load owner OR the assigned driver. The driver is the
+    // party physically carrying the load and the only person able to record
+    // cold-chain readings in transit.
     if (req.user.role !== 'admin') {
       let isAuthorized = false;
 
       if (req.user.role === 'iot_device') {
-        isAuthorized = req.user.id === loadId;
+        isAuthorized = load.device_id === req.user.id;
       } else {
         isAuthorized = load.customer_id === req.user.id;
         if (!isAuthorized && load.order_display_id) {
@@ -161,7 +163,7 @@ router.get('/telemetry/:id', telemetryHistoryLimiter, authenticate, validatePara
   try {
     const { data: load, error: loadErr } = await supabaseAdmin
       .from('load_offers')
-      .select('customer_id, order_display_id')
+      .select('customer_id, order_display_id, device_id')
       .eq('id', loadId)
       .maybeSingle();
 
@@ -175,17 +177,25 @@ router.get('/telemetry/:id', telemetryHistoryLimiter, authenticate, validatePara
     }
 
     if (req.user.role !== 'admin') {
-      let isAuthorized = load.customer_id === req.user.id;
+      let isAuthorized = false;
 
-      if (!isAuthorized && load.order_display_id) {
-        const { data: order } = await supabaseAdmin
-          .from('orders')
-          .select('driver_id')
-          .eq('order_display_id', load.order_display_id)
-          .in('status', ['truck_assigned', 'en_route_pickup', 'arrived_pickup', 'picked_up', 'in_transit', 'arriving', 'delivered'])
-          .maybeSingle();
+      if (req.user.role === 'iot_device') {
+        // Provisioned devices may read back their own telemetry history for
+        // the load they are provisioned to (load_offers.device_id).
+        isAuthorized = load.device_id === req.user.id;
+      } else {
+        isAuthorized = load.customer_id === req.user.id;
 
-        isAuthorized = order?.driver_id === req.user.id;
+        if (!isAuthorized && load.order_display_id) {
+          const { data: order } = await supabaseAdmin
+            .from('orders')
+            .select('driver_id')
+            .eq('order_display_id', load.order_display_id)
+            .in('status', ['truck_assigned', 'en_route_pickup', 'arrived_pickup', 'picked_up', 'in_transit', 'arriving', 'delivered'])
+            .maybeSingle();
+
+          isAuthorized = order?.driver_id === req.user.id;
+        }
       }
 
       if (!isAuthorized) {
