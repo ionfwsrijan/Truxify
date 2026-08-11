@@ -1,12 +1,16 @@
 import { AsyncLocalStorage } from 'async_hooks';
 import { randomUUID } from 'crypto';
 import logger from './logger.js';
+import { SAFE_REQUEST_ID } from './requestId.js';
 
 export const correlationContext = new AsyncLocalStorage();
 
 export function correlationIdMiddleware(req, res, next) {
   const header = req.headers['x-correlation-id'];
-  const correlationId = (typeof header === 'string' && header.trim()) ? header.trim() : randomUUID();
+  const correlationId =
+    typeof header === 'string' && SAFE_REQUEST_ID.test(header.trim())
+      ? header.trim()
+      : randomUUID();
 
   req.correlationId = correlationId;
   res.setHeader('X-Correlation-ID', correlationId);

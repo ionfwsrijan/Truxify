@@ -80,4 +80,38 @@ describe('correlationIdMiddleware', () => {
     expect(req.correlationId).toBe(validUuid);
     expect(res.setHeader).toHaveBeenCalledWith('X-Correlation-ID', validUuid);
   });
+
+  it('rejects unsafe header values (spaces, quotes, newlines) with a generated ID', () => {
+    const req = makeReq({ 'x-correlation-id': 'unsafe "id" with spaces' });
+    const res = makeRes();
+    const next = vi.fn();
+    correlationIdMiddleware(req, res, next);
+    expect(req.correlationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    );
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'X-Correlation-ID',
+      expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    );
+  });
+
+  it('rejects header values longer than 64 characters', () => {
+    const tooLong = 'a'.repeat(65);
+    const req = makeReq({ 'x-correlation-id': tooLong });
+    const res = makeRes();
+    const next = vi.fn();
+    correlationIdMiddleware(req, res, next);
+    expect(req.correlationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    );
+  });
+
+  it('accepts a 64-char safe value with allowed characters only', () => {
+    const safe64 = 'a'.repeat(64);
+    const req = makeReq({ 'x-correlation-id': safe64 });
+    const res = makeRes();
+    const next = vi.fn();
+    correlationIdMiddleware(req, res, next);
+    expect(req.correlationId).toBe(safe64);
+  });
 });

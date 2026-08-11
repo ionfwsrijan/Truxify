@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import logger from './logger.js';
 
-const SAFE_REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
+export const SAFE_REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export function requestIdMiddleware(req, res, next) {
   const incoming = req.headers['x-request-id'];
