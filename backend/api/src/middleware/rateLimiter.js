@@ -32,6 +32,11 @@ export function isSuspiciousForwardedHeader(header) {
  * limiter to the in-memory store for the life of the process. This wrapper
  * serves requests from an in-memory fallback until Redis becomes ready, then
  * promotes itself to a RedisStore so counters are shared across instances.
+ *
+ * Promotion is not permanent: if a promoted RedisStore later rejects (e.g.
+ * Redis drops after startup), the wrapper degrades back to the in-memory
+ * store for that and subsequent requests instead of letting the rejection
+ * surface as a 500. It re-promotes once Redis is reachable again.
  */
 class DeferredRedisStore {
   constructor(prefix) {
@@ -40,6 +45,7 @@ class DeferredRedisStore {
     this.memoryStore = new MemoryStore();
     this.redisStore = null;
     this.redisInitFailed = false;
+    this.redisHealthy = false;
   }
 
   init(options) {
@@ -48,7 +54,7 @@ class DeferredRedisStore {
   }
 
   activeStore() {
-    if (this.redisStore) return this.redisStore;
+    if (this.redisStore && this.redisHealthy) return this.redisStore;
     if (this.redisInitFailed || !isRedisReady()) return this.memoryStore;
 
     try {
@@ -58,6 +64,7 @@ class DeferredRedisStore {
       });
       store.init(this.options);
       this.redisStore = store;
+      this.redisHealthy = true;
       logger.info(`Rate limiter "${this.prefix}" now backed by Redis.`);
       return store;
     } catch (err) {
@@ -70,16 +77,31 @@ class DeferredRedisStore {
     }
   }
 
+  async runWithFallback(operation, key) {
+    try {
+      return await this.activeStore()[operation](key);
+    } catch (err) {
+      if (this.redisStore && this.redisHealthy) {
+        this.redisHealthy = false;
+        logger.error(
+          { err },
+          `Redis rate limiter store "${this.prefix}" failed on ${operation}; degrading to in-memory store.`,
+        );
+      }
+      return this.memoryStore[operation](key);
+    }
+  }
+
   increment(key) {
-    return this.activeStore().increment(key);
+    return this.runWithFallback("increment", key);
   }
 
   decrement(key) {
-    return this.activeStore().decrement(key);
+    return this.runWithFallback("decrement", key);
   }
 
   resetKey(key) {
-    return this.activeStore().resetKey(key);
+    return this.runWithFallback("resetKey", key);
   }
 
   resetAll() {

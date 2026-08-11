@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { normalizeIp, safeIpKeyGenerator, userKeyGenerator } from '../../src/middleware/rateLimiter.js';
+import { describe, it, expect, vi } from 'vitest';
+import {
+  normalizeIp,
+  safeIpKeyGenerator,
+  userKeyGenerator,
+  __testing,
+} from '../../src/middleware/rateLimiter.js';
 
 describe('rateLimiter - normalizeIp & IPv6 Subnet Masking', () => {
   it('returns unknown for invalid or missing IP', () => {
@@ -66,5 +71,67 @@ describe('rateLimiter - normalizeIp & IPv6 Subnet Masking', () => {
     expect(keyA).not.toBe(keyB);
     // Both clients shared the same immediate peer, but must not share a bucket.
     expect(keyA).not.toBe(safeIpKeyGenerator({ ip: '10.0.0.1' }));
+  });
+});
+
+describe('DeferredRedisStore - fallback when Redis drops after promotion', () => {
+  const { DeferredRedisStore } = __testing;
+
+  function createStore() {
+    const store = new DeferredRedisStore('rl:test:');
+    store.init({ windowMs: 60 * 1000, max: 100 });
+    return store;
+  }
+
+  function makeRejectingRedisStore() {
+    const reject = vi.fn(() => Promise.reject(new Error('redis is down')));
+    return {
+      init: () => {},
+      increment: reject,
+      decrement: reject,
+      resetKey: reject,
+      resetAll: reject,
+      get: reject,
+    };
+  }
+
+  it('serves from memory until Redis becomes ready', () => {
+    const store = createStore();
+    expect(store.activeStore()).toBe(store.memoryStore);
+  });
+
+  it('returns the promoted Redis store while it is healthy', () => {
+    const store = createStore();
+    const redisStore = {
+      init: () => {},
+      increment: () => Promise.resolve({ totalHits: 1, resetTime: new Date() }),
+    };
+    store.redisStore = redisStore;
+    store.redisHealthy = true;
+    expect(store.activeStore()).toBe(redisStore);
+  });
+
+  it('falls back to the memory store when a promoted Redis increment rejects', async () => {
+    const store = createStore();
+    store.redisStore = makeRejectingRedisStore();
+    store.redisHealthy = true;
+
+    const result = await store.increment('ip:1.2.3.4');
+
+    expect(store.redisHealthy).toBe(false);
+    expect(store.activeStore()).toBe(store.memoryStore);
+    expect(result).toHaveProperty('totalHits');
+    expect(result.totalHits).toBe(1);
+  });
+
+  it('keeps serving from memory for subsequent calls after degradation', async () => {
+    const store = createStore();
+    store.redisStore = makeRejectingRedisStore();
+    store.redisHealthy = true;
+
+    await store.increment('ip:1.2.3.4');
+    await expect(store.decrement('ip:1.2.3.4')).resolves.toBeUndefined();
+    await expect(store.resetKey('ip:1.2.3.4')).resolves.toBeUndefined();
+    expect(store.redisStore.increment).toHaveBeenCalledTimes(1);
   });
 });
