@@ -4,12 +4,14 @@ DROP POLICY IF EXISTS fraud_risk_scores_authenticated_all ON public.fraud_risk_s
 DROP POLICY IF EXISTS fraud_review_queue_authenticated_all ON public.fraud_review_queue;
 
 -- Admin read-only policies
+-- Ownership must resolve the caller to profiles.id (auth.uid() is the Firebase
+-- UID and never equals profiles.id; get_profile_id() maps the JWT sub to it).
 CREATE POLICY "Admins can read behavioral_profiles"
 ON public.behavioral_profiles FOR SELECT TO authenticated
 USING (
   EXISTS (
     SELECT 1 FROM public.profiles
-    WHERE profiles.id = auth.uid()
+    WHERE profiles.id = get_profile_id()
       AND profiles.role = 'admin'
   )
 );
@@ -19,7 +21,7 @@ ON public.fraud_risk_scores FOR SELECT TO authenticated
 USING (
   EXISTS (
     SELECT 1 FROM public.profiles
-    WHERE profiles.id = auth.uid()
+    WHERE profiles.id = get_profile_id()
       AND profiles.role = 'admin'
   )
 );
@@ -29,7 +31,7 @@ ON public.fraud_review_queue FOR SELECT TO authenticated
 USING (
   EXISTS (
     SELECT 1 FROM public.profiles
-    WHERE profiles.id = auth.uid()
+    WHERE profiles.id = get_profile_id()
       AND profiles.role = 'admin'
   )
 );
