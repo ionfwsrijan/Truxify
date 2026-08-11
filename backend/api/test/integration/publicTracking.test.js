@@ -315,6 +315,31 @@ describe('Tracking Routes', () => {
       expect(res.status).toBe(422);
       expect(res.body.error).toBe('Route coordinates are not available for this order');
     });
+
+    it('should return 404 for invalid token on the route endpoint', async () => {
+      const res = await request(app)
+        .get('/api/public/tracking/invalid-token-abc123/route');
+
+      expect(res.status).toBe(404);
+    });
+
+    it('should return 410 for revoked token on the route endpoint', async () => {
+      const shareRes = await request(app)
+        .post('/api/orders/%23FF20241205/share-tracking')
+        .set('x-user-id', 'customer-uuid-123')
+        .send({});
+
+      await request(app)
+        .post('/api/orders/%23FF20241205/share-tracking/revoke')
+        .set('x-user-id', 'customer-uuid-123')
+        .send({});
+
+      const res = await request(app)
+        .get(`/api/public/tracking/${shareRes.body.token}/route`);
+
+      expect(res.status).toBe(410);
+      expect(res.body.error).toBe('This tracking link has been revoked');
+    });
   });
 
   describe('Security: No auth required for public endpoint', () => {

@@ -19,6 +19,18 @@ function parseFiniteCoordinate(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// Shared mapping so both public endpoints report the same status for a given
+// invalid-token state: revoked/expired -> 410, not_found -> 404.
+function invalidTokenStatus(reason) {
+  const statusMessages = {
+    not_found: { status: 404, message: 'Tracking link not found or invalid' },
+    revoked: { status: 410, message: 'This tracking link has been revoked' },
+    expired: { status: 410, message: 'This tracking link has expired' },
+  };
+
+  return statusMessages[reason] || statusMessages.not_found;
+}
+
 // Rate limiter — generous for public consumers, strict per IP
 const publicLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
@@ -48,13 +60,7 @@ router.get(
       }
 
       if (!validation.valid) {
-        const statusMessages = {
-          not_found: { status: 404, message: 'Tracking link not found or invalid' },
-          revoked: { status: 410, message: 'This tracking link has been revoked' },
-          expired: { status: 410, message: 'This tracking link has expired' },
-        };
-
-        const { status, message } = statusMessages[validation.reason] || statusMessages.not_found;
+        const { status, message } = invalidTokenStatus(validation.reason);
         return res.status(status).json({ error: message });
       }
 
@@ -138,7 +144,8 @@ router.get(
       }
 
       if (!validation.valid) {
-        return res.status(404).json({ error: 'Tracking link not found or invalid' });
+        const { status, message } = invalidTokenStatus(validation.reason);
+        return res.status(status).json({ error: message });
       }
 
       const { orderDisplayId } = validation;
