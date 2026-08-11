@@ -14,10 +14,14 @@ SELECT
   t.truck_type          AS truck_type,
   t.number_plate        AS truck_number,
   CASE WHEN dd.is_online THEN 'AVAILABLE' ELSE 'OFFLINE' END AS status,
+  -- current_location is lat/lng only. driver_locations.accuracy is a GPS
+  -- accuracy figure (metres), not a textual address; exposing it as
+  -- 'address' made consumers render nonsense values ("" or "12.5"). There is
+  -- no address column on driver_locations to source a real one from, so the
+  -- bogus key is dropped rather than lying about the data.
   jsonb_build_object(
     'lat', dl.latitude,
-    'lng', dl.longitude,
-    'address', COALESCE(dl.accuracy::text, '')
+    'lng', dl.longitude
   )                     AS current_location,
   dd.rating             AS rating,
   dd.total_trips        AS trips_completed,
