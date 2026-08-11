@@ -460,6 +460,12 @@ app.use(suspiciousRequests)
 // allowed types match the parsers registered above.
 app.use(requireJsonContent)
 
+// Response sanitizer wraps res.json to strip internal/private fields from every
+// JSON response. It must be registered before the API routers below; mounting
+// it after them would mean it only ever runs for the 404 fallthrough and real
+// responses would never be sanitized.
+app.use(responseSanitizer)
+
 /// Fraud middleware is NOT registered globally here.
 // It is applied per-route after authenticate() so req.user is always set.
 // See individual route mounts below.
@@ -681,8 +687,6 @@ setupSwagger(app)
 
 // Root route
 app.get('/', getRoot)
-
-app.use(responseSanitizer)
 
 // Handling 404 Route Not Found
 app.use(notFound)
