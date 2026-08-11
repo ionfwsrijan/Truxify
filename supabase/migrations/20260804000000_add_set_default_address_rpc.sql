@@ -17,9 +17,12 @@ DECLARE
   v_exists BOOLEAN;
 BEGIN
   -- Verify the caller IS the user whose addresses are being modified.
-  -- auth.uid() is NULL for unauthenticated calls, and NULL <> x is NULL
-  -- (not TRUE), so this must be a null-safe check to actually block them.
-  IF auth.uid() IS NULL OR auth.uid() <> p_user_id THEN
+  -- get_profile_id() maps the Firebase JWT sub to profiles.id, which is what
+  -- saved_addresses.user_id actually stores (auth.uid() is the Firebase UID
+  -- and would never match). auth.uid() is NULL for unauthenticated calls, and
+  -- NULL <> x is NULL (not TRUE), so this must be a null-safe check to
+  -- actually block them.
+  IF auth.uid() IS NULL OR get_profile_id() <> p_user_id THEN
     RAISE EXCEPTION 'Unauthorized: you can only modify your own addresses';
   END IF;
 
