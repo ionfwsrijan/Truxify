@@ -30,9 +30,11 @@ function makeRes() {
 }
 
 describe('headerSizeMonitor', () => {
-  it('skips in production (calls next immediately)', () => {
+  it('stays active in production (calls next without logging when within limit)', () => {
     const originalEnv = process.env.NODE_ENV;
+    const originalEnabled = process.env.HEADER_MONITOR_ENABLED;
     process.env.NODE_ENV = 'production';
+    delete process.env.HEADER_MONITOR_ENABLED;
     try {
       const req = makeReq({ 'content-type': 'application/json' });
       const res = makeRes();
@@ -42,6 +44,30 @@ describe('headerSizeMonitor', () => {
       expect(logger.warn).not.toHaveBeenCalled();
     } finally {
       process.env.NODE_ENV = originalEnv;
+      if (originalEnabled !== undefined) process.env.HEADER_MONITOR_ENABLED = originalEnabled;
+      else delete process.env.HEADER_MONITOR_ENABLED;
+    }
+  });
+
+  it('skips when HEADER_MONITOR_ENABLED is false', () => {
+    const originalEnabled = process.env.HEADER_MONITOR_ENABLED;
+    const originalLimit = process.env.HEADER_SIZE_LIMIT;
+    process.env.HEADER_MONITOR_ENABLED = 'false';
+    process.env.HEADER_SIZE_LIMIT = '10';
+    try {
+      const req = makeReq({
+        'x-custom-long-header': 'this-is-a-very-long-header-value-that-exceeds-limit',
+      });
+      const res = makeRes();
+      const next = vi.fn();
+      headerSizeMonitor(req, res, next);
+      expect(next).toHaveBeenCalledOnce();
+      expect(logger.warn).not.toHaveBeenCalled();
+    } finally {
+      if (originalEnabled !== undefined) process.env.HEADER_MONITOR_ENABLED = originalEnabled;
+      else delete process.env.HEADER_MONITOR_ENABLED;
+      if (originalLimit !== undefined) process.env.HEADER_SIZE_LIMIT = originalLimit;
+      else delete process.env.HEADER_SIZE_LIMIT;
     }
   });
 

@@ -3,7 +3,7 @@ import logger from './logger.js';
 const DEFAULT_LIMIT = 8192; // 8 KB
 
 export default function headerSizeMonitor(req, res, next) {
-  if (process.env.NODE_ENV === 'production') {
+  if (process.env.HEADER_MONITOR_ENABLED === 'false') {
     return next();
   }
 
