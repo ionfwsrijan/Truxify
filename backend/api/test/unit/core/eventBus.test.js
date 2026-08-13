@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import eventBus, { EventBus } from '../../../src/core/events/EventBus.js';
 import { BaseEvent } from '../../../src/core/events/BaseEvent.js';
+import { EventMetadata } from '../../../src/core/events/EventMetadata.js';
 
 describe('EventBus', () => {
   let bus;
@@ -12,6 +13,8 @@ describe('EventBus', () => {
   afterEach(() => {
     bus.removeAllListeners();
     bus.clearMetrics();
+    bus._stopDeduplicationPruning();
+    vi.useRealTimers();
   });
 
   describe('publish and subscribe', () => {
@@ -143,6 +146,96 @@ describe('EventBus', () => {
       bus.publish(event, { deduplicate: false });
 
       expect(handler).toHaveBeenCalledTimes(2);
+    });
+
+    it('should stop deduplicating after the dedup window elapses', () => {
+      let now = 0;
+      bus._now = () => now;
+
+      const handler = vi.fn();
+      bus.subscribe('window:test', handler);
+      const event = new BaseEvent({ eventType: 'window:test', payload: { v: 1 } });
+
+      bus.publish(event);
+      bus.publish(event);
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      now += bus._deduplicationWindowMs + 1;
+      bus.publish(event);
+      expect(handler).toHaveBeenCalledTimes(2);
+    });
+
+    it('should hard-cap the dedup map to max size and evict the oldest entry', () => {
+      bus._deduplicationMaxSize = 3;
+      const handler = vi.fn();
+      bus.subscribe('cap:test', handler);
+
+      for (let i = 0; i < 10; i++) {
+        bus.publish(
+          new BaseEvent({
+            eventType: 'cap:test',
+            payload: { v: i },
+            metadata: new EventMetadata({ eventId: `cap-${i}`, eventType: 'cap:test' }),
+          }),
+        );
+      }
+
+      expect(bus._deduplication.size).toBe(3);
+      expect(bus._deduplication.has('cap-0')).toBe(false);
+      expect(bus._deduplication.has('cap-7')).toBe(true);
+      expect(bus._deduplication.has('cap-8')).toBe(true);
+      expect(bus._deduplication.has('cap-9')).toBe(true);
+    });
+
+    it('should tolerate wall-clock jumps without widening or collapsing the dedup window', () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      let monotonic = 0;
+      bus._now = () => monotonic;
+
+      const handler = vi.fn();
+      bus.subscribe('skew:test', handler);
+      const event = new BaseEvent({ eventType: 'skew:test', payload: { v: 1 } });
+
+      bus.publish(event);
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(Date.now() + 10 * 60 * 1000);
+      bus.publish(event);
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(Date.now() - 20 * 60 * 1000);
+      bus.publish(event);
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('should purge expired entries even when the map is small', () => {
+      let now = 0;
+      bus._now = () => now;
+
+      bus.publish(
+        new BaseEvent({
+          eventType: 'purge:test',
+          payload: { v: 1 },
+          metadata: new EventMetadata({ eventId: 'purge-1', eventType: 'purge:test' }),
+        }),
+      );
+      bus.publish(
+        new BaseEvent({
+          eventType: 'purge:test',
+          payload: { v: 2 },
+          metadata: new EventMetadata({ eventId: 'purge-2', eventType: 'purge:test' }),
+        }),
+      );
+
+      expect(bus._deduplication.size).toBe(2);
+
+      now += bus._deduplicationWindowMs / 2;
+      bus._pruneExpiredDeduplicationEntries();
+      expect(bus._deduplication.size).toBe(2);
+
+      now += bus._deduplicationWindowMs / 2 + 1;
+      bus._pruneExpiredDeduplicationEntries();
+      expect(bus._deduplication.size).toBe(0);
     });
   });
 

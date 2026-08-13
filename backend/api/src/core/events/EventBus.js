@@ -7,13 +7,17 @@ import { context, trace, SpanStatusCode } from '@opentelemetry/api';
 import spanFactory, { STANDARD_ATTRIBUTES } from '../telemetry/SpanFactory.js';
 
 class EventBus extends EventEmitter {
-  constructor() {
+  constructor({ deduplicationWindowMs = 60000, deduplicationMaxSize = 10000 } = {}) {
     super();
     this.setMaxListeners(50);
     this._adapters = new Map();
     this._registry = new EventRegistry();
     this._deduplication = new Map();
-    this._deduplicationWindowMs = 60000;
+    this._deduplicationWindowMs = deduplicationWindowMs;
+    this._deduplicationMaxSize = deduplicationMaxSize;
+    this._deduplicationPruneIntervalMs = this._deduplicationWindowMs / 2;
+    this._now = typeof performance !== 'undefined' ? () => performance.now() : Date.now;
+    this._deduplicationPruneTimer = null;
     this._listenerWrappers = new Map();
     this._metrics = {
       published: 0,
@@ -21,6 +25,7 @@ class EventBus extends EventEmitter {
       errors: 0,
       deduplicated: 0,
     };
+    this._startDeduplicationPruning();
   }
 
   get registry() {
@@ -245,24 +250,49 @@ class EventBus extends EventEmitter {
     const eventId = event.metadata?.eventId;
     if (!eventId) return false;
 
-    const now = Date.now();
-    const lastSeen = this._deduplication.get(eventId);
-    if (lastSeen && (now - lastSeen) < this._deduplicationWindowMs) {
+    const now = this._now();
+    const record = this._deduplication.get(eventId);
+    if (record && (now - record.ts) < this._deduplicationWindowMs) {
       return true;
     }
 
-    this._deduplication.set(eventId, now);
+    this._deduplication.set(eventId, { ts: now, seen: true });
 
-    if (this._deduplication.size > 10000) {
-      const cutoff = now - this._deduplicationWindowMs;
-      for (const [key, timestamp] of this._deduplication) {
-        if (timestamp < cutoff) {
-          this._deduplication.delete(key);
-        }
+    if (this._deduplication.size > this._deduplicationMaxSize) {
+      const oldestKey = this._deduplication.keys().next().value;
+      if (oldestKey !== undefined) {
+        this._deduplication.delete(oldestKey);
       }
     }
 
     return false;
+  }
+
+  _pruneExpiredDeduplicationEntries() {
+    const cutoff = this._now() - this._deduplicationWindowMs;
+    for (const [key, record] of this._deduplication) {
+      if (record.ts < cutoff) {
+        this._deduplication.delete(key);
+      }
+    }
+  }
+
+  _startDeduplicationPruning() {
+    if (this._deduplicationPruneTimer) return;
+    this._deduplicationPruneTimer = setInterval(
+      () => this._pruneExpiredDeduplicationEntries(),
+      this._deduplicationPruneIntervalMs,
+    );
+    if (this._deduplicationPruneTimer.unref) {
+      this._deduplicationPruneTimer.unref();
+    }
+  }
+
+  _stopDeduplicationPruning() {
+    if (this._deduplicationPruneTimer) {
+      clearInterval(this._deduplicationPruneTimer);
+      this._deduplicationPruneTimer = null;
+    }
   }
 
   async _publishToAdapters(event, options) {
