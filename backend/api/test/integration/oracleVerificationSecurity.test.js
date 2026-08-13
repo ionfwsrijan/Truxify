@@ -8,6 +8,8 @@ import express from 'express';
 const VALID_ORDER_ID = '550e8400-e29b-41d4-a716-446655440000';
 const VALID_DRIVER_ID = '660e8400-e29b-41d4-a716-446655440001';
 
+const VALID_BLOCKCHAIN_HASH = '0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+
 const mockOracleService = {
   confirmDelivery: vi.fn().mockResolvedValue({
     confirmed: true,
@@ -23,9 +25,9 @@ const mockOracleService = {
   }),
   verifyCrossChain: vi.fn().mockResolvedValue({
     verified: true,
-    ipfsHash: '0xabc123',
-    blockchainHash: '0xabc123',
-    verificationUrl: 'https://polygonscan.com/tx/0xabc123',
+    ipfsHash: VALID_BLOCKCHAIN_HASH,
+    blockchainHash: VALID_BLOCKCHAIN_HASH,
+    verificationUrl: `https://polygonscan.com/tx/${VALID_BLOCKCHAIN_HASH}`,
   }),
 };
 
@@ -132,7 +134,7 @@ const validConfirmBody = {
 
 const validCrosschainBody = {
   orderId: VALID_ORDER_ID,
-  blockchainHash: '0xabc123def456',
+  blockchainHash: VALID_BLOCKCHAIN_HASH,
 };
 
 describe('Oracle Routes — Authentication', () => {
@@ -310,6 +312,34 @@ describe('Oracle Routes — Request Validation', () => {
       .post('/api/oracle/verify-crosschain')
       .set(USER_HEADERS)
       .send({ ...validCrosschainBody, blockchainHash: 'not-hex' });
+    expect(res.status).toBe(400);
+    expect(res.body.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'blockchainHash' }),
+      ])
+    );
+  });
+
+  it('POST /verify-crosschain returns 400 for blockchainHash that is not 64 hex chars', async () => {
+    const app = buildOracleApp();
+    const res = await request(app)
+      .post('/api/oracle/verify-crosschain')
+      .set(USER_HEADERS)
+      .send({ ...validCrosschainBody, blockchainHash: '0xabc123def456' });
+    expect(res.status).toBe(400);
+    expect(res.body.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'blockchainHash' }),
+      ])
+    );
+  });
+
+  it('POST /verify-crosschain returns 400 for blockchainHash missing the 0x prefix', async () => {
+    const app = buildOracleApp();
+    const res = await request(app)
+      .post('/api/oracle/verify-crosschain')
+      .set(USER_HEADERS)
+      .send({ ...validCrosschainBody, blockchainHash: VALID_BLOCKCHAIN_HASH.slice(2) });
     expect(res.status).toBe(400);
     expect(res.body.details).toEqual(
       expect.arrayContaining([

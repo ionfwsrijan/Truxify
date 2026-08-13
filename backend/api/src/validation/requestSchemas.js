@@ -339,7 +339,7 @@ export const oracleVerifyCrosschainSchema = z.object({
   blockchainHash: z
     .string()
     .min(1, 'blockchainHash is required')
-    .regex(/^0x[a-fA-F0-9]+$/, { message: 'blockchainHash must be a 0x-prefixed hex string' }),
+    .regex(/^0x[0-9a-fA-F]{64}$/, { message: 'blockchainHash must be a 0x-prefixed 64-character hex string' }),
 }).strict();
 
 export const verifyOrderParamsSchema = z.object({
