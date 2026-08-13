@@ -268,14 +268,45 @@ class OrderConsumer {
         continue;
       }
 
+      let claimedEventId = null;
       try {
+        // Replay must honor the same claim-first idempotency guard as live
+        // consumption (issue #11218): if the event was already claimed and
+        // completed, re-running the handlers would re-apply its side effects.
+        // Claim keys resolve like the live side-effect path; never fall back
+        // to the order id, which collides distinct events of one order on the
+        // same topic (issue #11283).
+        const eventId = parsedMessage?.metadata?.eventId || parsedMessage?.eventId || parsedMessage?.id || null;
+        if (eventId) {
+          const isNew = await processedEventRepository.claimProcessing(
+            entry.topic,
+            eventId,
+            parsedMessage?.orderId || parsedMessage?.payload?.orderId || null
+          );
+          if (!isNew) {
+            logger.info(`[OrderConsumer] Replay skipping already-processed event ${eventId} on ${entry.topic}`);
+            await deadLetterRepository.markStatus(entry.id, 'replayed');
+            results.succeeded += 1;
+            continue;
+          }
+          claimedEventId = eventId;
+        }
+
         for (const handler of topicHandlers) {
           await handler(parsedMessage, { value: parsedMessage });
+        }
+        if (claimedEventId) {
+          await processedEventRepository.markCompleted(entry.topic, claimedEventId);
         }
         await deadLetterRepository.markStatus(entry.id, 'replayed');
         results.succeeded += 1;
       } catch (error) {
         logger.error(`Replay failed for dead letter ${entry.id} (${entry.topic}):`, error);
+        // A claimed event is returned to 'failed' so a later delivery (live or
+        // replay) can re-claim and retry it instead of losing the side effect.
+        if (claimedEventId) {
+          await processedEventRepository.markFailed(entry.topic, claimedEventId);
+        }
         // Cap replay attempts so a poison message is not retried forever.
         // After the cap the dead letter is marked failed and no longer
         // picked up by listPending(), otherwise each replay cycles the same

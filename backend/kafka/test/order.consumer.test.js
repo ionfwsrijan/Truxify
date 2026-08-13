@@ -100,6 +100,17 @@ function orderEventMessage({ eventId = 'evt-1234', orderId = ORDER_ID } = {}) {
   };
 }
 
+// Mirrors the shape persisted by storeDeadLetter: entry.message is the DLQ
+// wrapper whose `message` field holds the JSON-encoded original Kafka value.
+function deadLetterEntry({ id = 'dlq-1', topic = 'payment.confirmed', eventId = 'evt-pay-1', orderId = ORDER_ID, retryCount = 0 } = {}) {
+  return {
+    id,
+    topic,
+    message: { message: JSON.stringify({ metadata: { eventId }, orderId }) },
+    retry_count: retryCount,
+  };
+}
+
 describe('OrderConsumer order read-model topics', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -248,5 +259,76 @@ describe('OrderConsumer side-effect topics', () => {
     expect(claimProcessingMock).not.toHaveBeenCalled();
     expect(markCompletedMock).not.toHaveBeenCalled();
     expect(markFailedMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('OrderConsumer dead-letter replay (issue #11218)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    orderConsumer.handlers.clear();
+    listPendingMock.mockResolvedValue([]);
+    claimProcessingMock.mockResolvedValue(true);
+  });
+
+  it('does not re-run handlers when replaying an already-claimed (completed) event', async () => {
+    const handler = vi.fn().mockResolvedValue();
+    orderConsumer.registerHandler('payment.confirmed', handler);
+    listPendingMock.mockResolvedValue([deadLetterEntry()]);
+    claimProcessingMock.mockResolvedValue(false);
+
+    const results = await orderConsumer.replayDeadLetters();
+
+    expect(claimProcessingMock).toHaveBeenCalledWith('payment.confirmed', 'evt-pay-1', ORDER_ID);
+    expect(handler).not.toHaveBeenCalled();
+    expect(markCompletedMock).not.toHaveBeenCalled();
+    expect(markStatusMock).toHaveBeenCalledWith('dlq-1', 'replayed');
+    expect(results).toEqual({ attempted: 1, succeeded: 1, failed: 0 });
+  });
+
+  it('runs handlers and completes the claim when replaying an unclaimed event', async () => {
+    const handler = vi.fn().mockResolvedValue();
+    orderConsumer.registerHandler('payment.confirmed', handler);
+    listPendingMock.mockResolvedValue([deadLetterEntry()]);
+
+    const results = await orderConsumer.replayDeadLetters();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(markCompletedMock).toHaveBeenCalledWith('payment.confirmed', 'evt-pay-1');
+    expect(markFailedMock).not.toHaveBeenCalled();
+    expect(markStatusMock).toHaveBeenCalledWith('dlq-1', 'replayed');
+    expect(results).toEqual({ attempted: 1, succeeded: 1, failed: 0 });
+  });
+
+  it('marks the claim failed and requeues the dead letter when replay fails below the retry cap', async () => {
+    const handler = vi.fn().mockRejectedValue(new Error('wallet provider down'));
+    orderConsumer.registerHandler('payment.confirmed', handler);
+    listPendingMock.mockResolvedValue([deadLetterEntry()]);
+
+    const results = await orderConsumer.replayDeadLetters();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(markFailedMock).toHaveBeenCalledWith('payment.confirmed', 'evt-pay-1');
+    expect(markCompletedMock).not.toHaveBeenCalled();
+    expect(markStatusMock).toHaveBeenCalledWith('dlq-1', 'pending', { incrementRetry: true });
+    expect(results).toEqual({ attempted: 1, succeeded: 0, failed: 1 });
+  });
+
+  it('replays an event with no resolvable event id without a claim guard', async () => {
+    const handler = vi.fn().mockResolvedValue();
+    orderConsumer.registerHandler('payment.confirmed', handler);
+    listPendingMock.mockResolvedValue([{
+      id: 'dlq-1',
+      topic: 'payment.confirmed',
+      message: { message: JSON.stringify({ orderId: ORDER_ID, payload: { amount: 10 } }) },
+      retry_count: 0,
+    }]);
+
+    const results = await orderConsumer.replayDeadLetters();
+
+    expect(claimProcessingMock).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(markCompletedMock).not.toHaveBeenCalled();
+    expect(markStatusMock).toHaveBeenCalledWith('dlq-1', 'replayed');
+    expect(results).toEqual({ attempted: 1, succeeded: 1, failed: 0 });
   });
 });
