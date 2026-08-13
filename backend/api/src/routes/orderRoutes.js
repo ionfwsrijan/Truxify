@@ -172,7 +172,7 @@ import { expireDeliveryOtps, sendPushNotification } from '../services/notificati
 import { DomainError } from '../services/order/domainError.js';
 import { predictDemand, predictPrice, matchEnRouteLoads } from '../services/ml.js';
 import { requireIdempotency } from '../middleware/idempotency.js';
-import { acquireLock, releaseLock } from '../lib/redisLock.js';
+import { acquireLock, releaseLock, renewLock, LockAcquisitionError } from '../lib/redisLock.js';
 import logger from '../middleware/logger.js';
 import { auditLog } from '../middleware/auditLog.js';
 import {
@@ -634,12 +634,16 @@ router.post('/:id/confirm-deposit', authenticate, userLimiter, requirePolicy('or
   const { txHash } = req.body;
 
   const lockKey = `escrow_lock:${orderId}`;
-  const lockValue = await acquireLock(lockKey, 120000);
-  if (!lockValue) {
-    return res.status(409).json({ error: 'Another deposit confirmation is in progress for this order. Please try again.' });
-  }
+  let lockValue = null;
 
   try {
+    // Fail closed: acquireLock throws LockAcquisitionError when Redis is
+    // unavailable and returns null when another request holds the lock.
+    lockValue = await acquireLock(lockKey, 120000);
+    if (!lockValue) {
+      return res.status(409).json({ error: 'Another deposit confirmation is in progress for this order. Please try again.' });
+    }
+
     const order = await orderValidationService.findOrderByIdOrDisplayId(orderId, 'id, status, order_display_id, customer_id, escrow_booking_id, escrow_status, escrow_amount_wei, escrow_driver_wallet, pending_bid_acceptance');
     orderValidationService.assertOrderFound(order);
     orderValidationService.assertCustomerOwnership(order, req.user.id);
@@ -656,6 +660,10 @@ router.post('/:id/confirm-deposit', authenticate, userLimiter, requirePolicy('or
     const finalizeAcceptance = async () => {
       const pending = order.pending_bid_acceptance;
       if (!pending) return;
+      // The 120s lock TTL can elapse while the accept_bid_tx RPC or the
+      // on-chain refund confirmation runs; renew the lock so a concurrent
+      // request cannot slip in mid-flight (#11224).
+      await renewLock(lockKey, lockValue, 120000);
       const { error: acceptErr } = await orderRepository.executeRpc('accept_bid_tx', {
         p_bid_id: pending.bid_id,
         p_order_id: orderId,
@@ -678,6 +686,7 @@ router.post('/:id/confirm-deposit', authenticate, userLimiter, requirePolicy('or
         // { txHash: null, bookingId, error } when the submit fails.
         let refundResult;
         try {
+          await renewLock(lockKey, lockValue, 120000);
           refundResult = await submitEscrowRefund(order.order_display_id);
         } catch (refundErr) {
           logger.error('[confirm-deposit] Escrow refund also failed:', refundErr.message);
@@ -686,6 +695,7 @@ router.post('/:id/confirm-deposit', authenticate, userLimiter, requirePolicy('or
         let refundConfirmed = !!(refundResult && !refundResult.error && refundResult.txHash);
         if (refundConfirmed && typeof refundResult.waitForConfirmation === 'function') {
           try {
+            await renewLock(lockKey, lockValue, 120000);
             await refundResult.waitForConfirmation();
           } catch (confirmErr) {
             logger.error('[confirm-deposit] Escrow refund confirmation failed:', confirmErr.message);
@@ -787,13 +797,21 @@ router.post('/:id/confirm-deposit', authenticate, userLimiter, requirePolicy('or
     await finalizeAcceptance();
     res.json({ message: 'Escrow deposit confirmed', txHash: result.txHash });
   } catch (err) {
+    if (err instanceof LockAcquisitionError) {
+      // Redis is down — do NOT proceed with the deposit mutation. Without the
+      // distributed lock a concurrent confirmation could double-fund (#11224).
+      logger.error('[confirm-deposit] Redis unavailable — refusing deposit confirmation:', err.message);
+      return res.status(503).json({ error: 'Payment service temporarily unavailable. Please retry in a moment.' });
+    }
     if (err instanceof DomainError) {
       return res.status(err.status).json(err.payload);
     }
     logger.error('[confirm-deposit] Exception:', err.message);
     res.status(500).json({ error: 'Internal Server Error' });
   } finally {
-    await releaseLock(lockKey, lockValue);
+    if (lockValue) {
+      await releaseLock(lockKey, lockValue);
+    }
   }
 });
 

@@ -5,12 +5,54 @@ import express from 'express';
 const { createSupabaseMock } = await vi.importActual('../helpers/supabaseMock.js');
 const m = createSupabaseMock();
 
+// In-memory stand-in for the Redis distributed lock used by redisLock.js
+// (acquireLock / renewLock / releaseLock). `set` honours SET NX semantics and
+// `eval` mirrors the compare-and-delete / compare-and-rearm Lua scripts.
+const lockStore = new Map();
+
+function createLockRedisClient() {
+  return {
+    // Never 'ready' so rate limiters keep their in-memory fallback.
+    status: undefined,
+    set: async (key, value) => {
+      if (lockStore.has(key)) return null;
+      lockStore.set(key, value);
+      return 'OK';
+    },
+    get: async (key) => lockStore.get(key) ?? null,
+    del: async (...keys) => {
+      let count = 0;
+      for (const key of keys) {
+        if (lockStore.delete(key)) count += 1;
+      }
+      return count;
+    },
+    eval: async (_script, _numKeys, key, value, ttlMs) => {
+      if (lockStore.get(key) !== value) return 0;
+      if (ttlMs !== undefined) {
+        lockStore.set(key, value); // PEXPIRE — re-arm the TTL
+      } else {
+        lockStore.delete(key); // DEL
+      }
+      return 1;
+    },
+    incr: async () => 1,
+    expire: async () => 1,
+    sadd: async () => 1,
+    smembers: async () => [],
+  };
+}
+
+const dbMock = {
+  redisClient: createLockRedisClient(),
+};
+
 vi.mock('../../src/config/db.js', () => ({
   supabase: m.supabase,
   createUserClient: () => m.supabase,
   firebaseAdmin: null,
-  redisClient: null,
   mongoDb: null,
+  get redisClient() { return dbMock.redisClient; },
 }));
 
 vi.mock('../../src/services/escrow.js', async () => {
@@ -65,6 +107,8 @@ describe('Bid Routes', () => {
     mockEscrowRefund.mockReset();
     mockEscrowDeposit.mockResolvedValue({ txHash: '0xdefaultescrow' });
     mockEscrowRefund.mockResolvedValue({ txHash: '0xdefaultrefund' });
+    lockStore.clear();
+    dbMock.redisClient = createLockRedisClient();
   });
 
   it('POST /:id/bids rejects invalid amount', async () => {
@@ -909,6 +953,81 @@ describe('Bid Routes', () => {
       const order = m.store.orders.find(o => o.id === 'order-1');
       expect(order.escrow_booking_id).toBeNull();
       expect(order.escrow_status).toBe('pending');
+    });
+
+    it('POST /:id/confirm-deposit fails closed with 503 when Redis is unavailable and never records the deposit', async () => {
+      m.store.orders.push({
+        id: 'order-1',
+        customer_id: 'customer-1',
+        order_display_id: 'OD1',
+        escrow_booking_id: 'escrow:OD1',
+        escrow_status: 'funding',
+      });
+
+      dbMock.redisClient = null;
+
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/orders/order-1/confirm-deposit')
+        .set(CUSTOMER)
+        .send({ txHash: '0x' + '1'.repeat(64) });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error).toMatch(/temporarily unavailable/i);
+      // Without the distributed lock the deposit must never be verified/recorded.
+      expect(mockRecordDepositTx).not.toHaveBeenCalled();
+
+      const order = m.store.orders.find(o => o.id === 'order-1');
+      expect(order.escrow_status).toBe('funding');
+    });
+
+    it('POST /:id/confirm-deposit returns 409 while another confirmation holds the escrow lock', async () => {
+      m.store.orders.push({
+        id: 'order-1',
+        customer_id: 'customer-1',
+        order_display_id: 'OD1',
+        escrow_booking_id: 'escrow:OD1',
+        escrow_status: 'funding',
+      });
+
+      // Simulate a concurrent confirmation already holding the lock.
+      lockStore.set('escrow_lock:order-1', 'another-process');
+
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/orders/order-1/confirm-deposit')
+        .set(CUSTOMER)
+        .send({ txHash: '0x' + '1'.repeat(64) });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/another deposit confirmation is in progress/i);
+      expect(mockRecordDepositTx).not.toHaveBeenCalled();
+
+      const order = m.store.orders.find(o => o.id === 'order-1');
+      expect(order.escrow_status).toBe('funding');
+    });
+
+    it('POST /:id/confirm-deposit rejects a second confirmation once the order is funded', async () => {
+      m.store.orders.push({
+        id: 'order-1',
+        customer_id: 'customer-1',
+        order_display_id: 'OD1',
+        escrow_booking_id: 'escrow:OD1',
+        escrow_status: 'funded',
+      });
+
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/orders/order-1/confirm-deposit')
+        .set(CUSTOMER)
+        .send({ txHash: '0x' + '1'.repeat(64) });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Order is not in funding state');
+      expect(mockRecordDepositTx).not.toHaveBeenCalled();
+
+      const order = m.store.orders.find(o => o.id === 'order-1');
+      expect(order.escrow_status).toBe('funded');
     });
   });
 });
