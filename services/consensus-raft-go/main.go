@@ -452,8 +452,14 @@ func (rn *RaftNode) sendHeartbeats() {
 				rn.nextIndex[res.url] = next
 			}
 		} else if rn.nextIndex[res.url] > 1 && res.request.PrevLogIndex+1 == rn.nextIndex[res.url] {
-			// Log inconsistency: back off and retry from an earlier prefix if probe matches current nextIndex.
-			rn.nextIndex[res.url]--
+			// Log inconsistency: jump nextIndex straight to one past the last
+			// entry this follower has confirmed (matchIndex) instead of
+			// decrementing one entry per heartbeat. matchIndex is a proven lower
+			// bound on the follower's matching prefix, so probing at
+			// matchIndex+1 repairs a diverged or shorter follower in a single
+			// subsequent AppendEntries round (Raft §5.3) and the next request
+			// carries the full missing prefix rather than an empty Entries slice.
+			rn.nextIndex[res.url] = rn.matchIndex[res.url] + 1
 		}
 	}
 
