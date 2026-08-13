@@ -23,6 +23,7 @@ class FraudDetectionService {
     this._cleanupInterval.unref?.();
     
     this.pendingUpserts = new Map();
+    this._flushInProgress = false;
     this._flushInterval = setInterval(() => this._flushPendingUpserts(), 5000); // flush every 5 seconds
     this._flushInterval.unref?.();
     
@@ -144,21 +145,46 @@ class FraudDetectionService {
 
   async _flushPendingUpserts() {
     if (this.pendingUpserts.size === 0 || !supabaseAdmin) return;
-    
-    // Extract records and clear the map for the next batch
-    const records = Array.from(this.pendingUpserts.values());
-    this.pendingUpserts.clear();
+
+    // Only one flush may run at a time. If a previous flush is still in
+    // flight, skip this tick: the in-flight flush already captured its batch,
+    // and any entries added mid-flight stay queued (reference check below) for
+    // the next interval, so overlapping flushes cannot drop each other's data.
+    if (this._flushInProgress) return;
+    this._flushInProgress = true;
 
     try {
-      const { error: dbErr } = await supabaseAdmin
-        .from('behavioral_profiles')
-        .upsert(records, { onConflict: 'user_id' });
+      // Capture the current batch without clearing the map yet. The map must
+      // not be emptied before the write succeeds, otherwise a failed/interrupted
+      // upsert silently loses the pending risk-score updates.
+      const snapshot = Array.from(this.pendingUpserts.entries());
+      const records = snapshot.map(([, record]) => record);
 
-      if (dbErr) {
-        logger.error('[FraudDetection] Failed to batch persist behavioral profiles to DB:', dbErr.message);
+      try {
+        const { error: dbErr } = await supabaseAdmin
+          .from('behavioral_profiles')
+          .upsert(records, { onConflict: 'user_id' });
+
+        if (dbErr) {
+          logger.error('[FraudDetection] Failed to batch persist behavioral profiles to DB:', dbErr.message);
+          return; // keep pending entries queued for the next flush
+        }
+
+        // Only drop the entries we actually persisted. A newer update for the
+        // same user may have arrived during the await and replaced the map value
+        // with a fresh object reference — that entry is still pending and must be
+        // kept for the next flush.
+        for (const [key, record] of snapshot) {
+          if (this.pendingUpserts.get(key) === record) {
+            this.pendingUpserts.delete(key);
+          }
+        }
+      } catch (error) {
+        logger.error('[FraudDetection] Batch upsert error:', error);
+        // Keep pending entries queued so updates are not silently lost.
       }
-    } catch (error) {
-      logger.error('[FraudDetection] Batch upsert error:', error);
+    } finally {
+      this._flushInProgress = false;
     }
   }
 

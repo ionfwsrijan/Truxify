@@ -93,4 +93,45 @@ describe('FraudDetectionService._flushPendingUpserts', () => {
 
     expect(FraudDetectionService.pendingUpserts.size).toBe(0);
   });
+
+  it('does not run overlapping flushes concurrently', async () => {
+    await trackOneUser('user-slow');
+    expect(FraudDetectionService.pendingUpserts.size).toBe(1);
+
+    let resolveUpsert;
+    const upsert = vi.fn().mockReturnValue(new Promise(resolve => { resolveUpsert = resolve; }));
+    mockFrom.mockReturnValue(chain({ upsert }));
+
+    const first = FraudDetectionService._flushPendingUpserts();
+    const second = FraudDetectionService._flushPendingUpserts();
+
+    // The second flush must bail out while the first is still in flight.
+    expect(upsert).toHaveBeenCalledTimes(1);
+
+    resolveUpsert({ error: null });
+    await Promise.all([first, second]);
+
+    expect(FraudDetectionService.pendingUpserts.size).toBe(0);
+  });
+
+  it('keeps a record replaced during an in-flight flush for the next batch', async () => {
+    await trackOneUser('user-replaced');
+    expect(FraudDetectionService.pendingUpserts.size).toBe(1);
+
+    let resolveUpsert;
+    const upsert = vi.fn().mockReturnValue(new Promise(resolve => { resolveUpsert = resolve; }));
+    mockFrom.mockReturnValue(chain({ upsert }));
+
+    const flush = FraudDetectionService._flushPendingUpserts();
+
+    // A newer event for the same user replaces the queued record mid-flight.
+    await trackOneUser('user-replaced');
+
+    resolveUpsert({ error: null });
+    await flush;
+
+    // The stale snapshot was persisted, but the newer record must remain queued.
+    expect(FraudDetectionService.pendingUpserts.size).toBe(1);
+    expect(FraudDetectionService.pendingUpserts.has('user-replaced')).toBe(true);
+  });
 });
