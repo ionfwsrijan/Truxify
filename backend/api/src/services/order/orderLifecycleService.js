@@ -37,6 +37,14 @@ import { generateOrderDisplayId, ORDER_DISPLAY_ID_MAX_RETRIES } from '../../lib/
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Statuses from which an order may transition to 'cancelled'. Terminal states
+// (delivered / payment_released / cancelled / disputed) and states where the
+// trip has already started (picked_up / in_transit / arriving) must never
+// match, so the conditional UPDATE serializes concurrent cancellations: only
+// the first request that flips a non-cancelled order wins, and the loser
+// matches zero rows (PGRST116) instead of double-applying side effects.
+const CANCELLABLE_ORDER_STATUSES = ['pending', 'active', 'assigned', 'truck_assigned', 'en_route_pickup', 'arrived_pickup'];
+
 export class OrderLifecycleService {
   constructor({ orderRepository, orderTimelineService, bidAcceptanceService, deliveryVerificationService, trackingTokenService }) {
     this.orderRepository = orderRepository;
@@ -53,6 +61,19 @@ export class OrderLifecycleService {
     } catch (error) {
       logger.error(`[OrderLifecycleService] Failed to revoke tracking tokens for order ${orderDisplayId}:`, error);
     }
+  }
+
+  // Idempotent success response for a cancel request that finds the order
+  // already cancelled. Never re-applies refunds or side effects.
+  _alreadyCancelledResponse(order) {
+    return {
+      status: 200,
+      body: {
+        message: order.escrow_status === 'refunded' ? 'Order was already cancelled and refunded.' : 'Order was already cancelled.',
+        cancellation_fee: order.cancellation_fee ?? 0,
+        order,
+      },
+    };
   }
 
   async createOrder(customerId, customerName, body) {
@@ -689,23 +710,23 @@ export class OrderLifecycleService {
         const escrowAmountWei = currentOrder.escrow_amount_wei ? BigInt(currentOrder.escrow_amount_wei) : 0n;
         const driverFeeWei = (escrowAmountWei * BigInt(penaltyBps)) / 10_000n;
 
-        if (currentOrder.status === 'cancelled' && (!requiresRefund || currentOrder.escrow_status === 'refunded')) {
-          await this.revokeTrackingTokensForOrder(currentOrder.order_display_id);
-          return {
-            status: 200,
-            body: {
-              message: currentOrder.escrow_status === 'refunded' ? 'Order was already cancelled and refunded.' : 'Order was already cancelled.',
-              cancellation_fee: currentOrder.cancellation_fee ?? 0,
-              order: currentOrder,
-            },
-          };
+        if (currentOrder.status === 'cancelled') {
+          const alreadyRefunded = currentOrder.escrow_status === 'refunded';
+          const refundInFlight = requiresRefund && !alreadyRefunded && currentOrder.refund_tx_hash;
+          if (!refundInFlight) {
+            await this.revokeTrackingTokensForOrder(currentOrder.order_display_id);
+            return this._alreadyCancelledResponse(currentOrder);
+          }
+          // A prior cancel already submitted an on-chain refund (refund_pending /
+          // refund_failed with a tx hash) — fall through to confirm the existing
+          // transaction instead of submitting a new one.
         }
 
         let workingOrder = currentOrder;
 
         if (requiresRefund && (currentOrder.status !== 'cancelled' || currentOrder.escrow_status !== 'refund_pending')) {
           const attemptAt = new Date().toISOString();
-          const { data: pendingOrder, error: pendingErr } = await this.orderRepository.updateOrderGuardStatus(
+          const { data: pendingOrder, error: pendingErr } = await this.orderRepository.updateOrderWithFilter(
             currentOrder.id,
             {
               status: 'cancelled',
@@ -717,19 +738,34 @@ export class OrderLifecycleService {
               escrow_refund_last_attempt_at: attemptAt,
               updated_at: attemptAt,
             },
-            ['delivered', 'payment_released']
+            [{ op: 'in', column: 'status', value: CANCELLABLE_ORDER_STATUSES }],
+            'id, order_display_id, status, cancellation_reason, escrow_status, refund_tx_hash, cancellation_fee'
           );
 
           if (pendingErr) {
             if (pendingErr.code === 'PGRST116') {
-              throw new DomainError(409, { error: 'Order was already delivered or payment released. Cannot cancel.' });
+              // The order left the cancellable status set concurrently (another
+              // cancel won the race, or the order reached a terminal/trip-started
+              // state). Re-read it and resolve deterministically.
+              const { data: racedOrder } = await this.orderRepository.findOrderById(currentOrder.id, 'order_display_id, status, cancellation_reason, escrow_status, refund_tx_hash, cancellation_fee');
+              if (racedOrder?.status === 'cancelled') {
+                if (racedOrder.escrow_status === 'refunded' || !racedOrder.refund_tx_hash) {
+                  await this.revokeTrackingTokensForOrder(racedOrder.order_display_id);
+                  return this._alreadyCancelledResponse(racedOrder);
+                }
+                workingOrder = racedOrder;
+              } else {
+                throw new DomainError(409, { error: 'Order was already delivered or payment released. Cannot cancel.' });
+              }
+            } else {
+              throw new DomainError(500, {
+                error: 'Failed to place the order into refund reconciliation.',
+                details: pendingErr.message,
+              });
             }
-            throw new DomainError(500, {
-              error: 'Failed to place the order into refund reconciliation.',
-              details: pendingErr.message,
-            });
+          } else {
+            workingOrder = pendingOrder;
           }
-          workingOrder = pendingOrder;
         }
 
         if (requiresRefund) {
@@ -836,14 +872,23 @@ export class OrderLifecycleService {
           updated_at: new Date().toISOString(),
         };
 
-        const { data: updatedOrder, error: updateErr } = await this.orderRepository.updateOrderGuardStatus(
+        const { data: updatedOrder, error: updateErr } = await this.orderRepository.updateOrderWithFilter(
           currentOrder.id,
           updatePayload,
-          ['delivered', 'payment_released', 'cancelled']
+          [{ op: 'in', column: 'status', value: CANCELLABLE_ORDER_STATUSES }],
+          'id, order_display_id, status, cancellation_reason, cancellation_fee, escrow_status'
         );
 
         if (updateErr) {
           if (updateErr.code === 'PGRST116') {
+            // Concurrently cancelled or moved to a terminal state. Return the
+            // idempotent success when another cancel already won, otherwise
+            // reject with the terminal-state error.
+            const { data: racedOrder } = await this.orderRepository.findOrderById(currentOrder.id, 'order_display_id, status, cancellation_reason, escrow_status, refund_tx_hash, cancellation_fee');
+            if (racedOrder?.status === 'cancelled') {
+              await this.revokeTrackingTokensForOrder(racedOrder.order_display_id);
+              return this._alreadyCancelledResponse(racedOrder);
+            }
             throw new DomainError(409, { error: 'Order was already cancelled, delivered, or payment released. Cannot cancel.' });
           }
           throw new DomainError(500, { error: 'Failed to cancel order.', details: updateErr.message });

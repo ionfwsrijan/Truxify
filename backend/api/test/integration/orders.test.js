@@ -2547,6 +2547,111 @@ describe('Customer actions: change-drop and cancel endpoints', () => {
     expect(m.store.orders[0].escrow_status).toBe('refunded');
   });
 
+  it('is idempotent: a repeated cancel of an already-cancelled order returns success without re-applying refunds or side effects', async () => {
+    m.store.orders.push({
+      id: 'aaaa0013-0000-4000-8000-000000000013',
+      customer_id: CUSTOMER_HEADERS['x-user-id'],
+      order_display_id: 'OD-ALREADY-CANCELLED',
+      status: 'cancelled',
+      cancellation_fee: 500
+    });
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/orders/aaaa0013-0000-4000-8000-000000000013/cancel')
+      .set('X-Idempotency-Key', Math.random().toString())
+      .set(CUSTOMER_HEADERS)
+      .send({ reason: 'Change of plans' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toBe('Order was already cancelled.');
+    expect(res.body.cancellation_fee).toBe(500);
+    expect(submitEscrowRefundMock).not.toHaveBeenCalled();
+    expect(confirmEscrowRefundMock).not.toHaveBeenCalled();
+    // No cancel timeline entry is re-written for an already-cancelled order.
+    const timelineInserts = m.calls.filter(c => c.table === 'order_timeline' && c.mode === 'insert');
+    expect(timelineInserts.length).toBe(0);
+    const stored = m.store.orders.find(o => o.id === 'aaaa0013-0000-4000-8000-000000000013');
+    expect(stored.status).toBe('cancelled');
+  });
+
+  it('is idempotent: a repeated cancel of a cancelled and refunded order does not re-submit or re-confirm a refund', async () => {
+    const txHash = `0x${'c'.repeat(64)}`;
+    m.store.orders.push({
+      id: 'aaaa0014-0000-4000-8000-000000000014',
+      customer_id: CUSTOMER_HEADERS['x-user-id'],
+      order_display_id: 'OD-ALREADY-REFUNDED',
+      status: 'cancelled',
+      escrow_status: 'refunded',
+      refund_tx_hash: txHash,
+      cancellation_fee: 500
+    });
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/orders/aaaa0014-0000-4000-8000-000000000014/cancel')
+      .set('X-Idempotency-Key', Math.random().toString())
+      .set(CUSTOMER_HEADERS)
+      .send({ reason: 'Change of plans' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toBe('Order was already cancelled and refunded.');
+    expect(submitEscrowRefundMock).not.toHaveBeenCalled();
+    expect(confirmEscrowRefundMock).not.toHaveBeenCalled();
+  });
+
+  it('prevents double refunds: a cancel on a refund_pending order with no tx hash does not submit a new on-chain refund', async () => {
+    m.store.orders.push({
+      id: 'aaaa0015-0000-4000-8000-000000000015',
+      customer_id: CUSTOMER_HEADERS['x-user-id'],
+      order_display_id: 'OD-REFUND-IN-FLIGHT',
+      status: 'cancelled',
+      escrow_status: 'refund_pending',
+      refund_tx_hash: null,
+      escrow_refund_attempts: 1,
+      cancellation_fee: 500
+    });
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/orders/aaaa0015-0000-4000-8000-000000000015/cancel')
+      .set('X-Idempotency-Key', Math.random().toString())
+      .set(CUSTOMER_HEADERS)
+      .send({ reason: 'Change of plans' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.message).toBe('Order was already cancelled.');
+    // The in-flight cancel owns the refund; a second cancel must not submit it.
+    expect(submitEscrowRefundMock).not.toHaveBeenCalled();
+    expect(confirmEscrowRefundMock).not.toHaveBeenCalled();
+    const stored = m.store.orders.find(o => o.id === 'aaaa0015-0000-4000-8000-000000000015');
+    expect(stored.escrow_status).toBe('refund_pending');
+    expect(stored.escrow_refund_attempts).toBe(1);
+  });
+
+  it('rejects cancel when the conditional status transition does not match (e.g. disputed order)', async () => {
+    m.store.orders.push({
+      id: 'aaaa0016-0000-4000-8000-000000000016',
+      customer_id: CUSTOMER_HEADERS['x-user-id'],
+      order_display_id: 'OD-DISPUTED',
+      status: 'disputed',
+      escrow_status: 'funded',
+      cancellation_fee: 500
+    });
+
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/orders/aaaa0016-0000-4000-8000-000000000016/cancel')
+      .set('X-Idempotency-Key', Math.random().toString())
+      .set(CUSTOMER_HEADERS)
+      .send({ reason: 'Disputed' });
+
+    expect(res.status).toBe(409);
+    expect(submitEscrowRefundMock).not.toHaveBeenCalled();
+    const stored = m.store.orders.find(o => o.id === 'aaaa0016-0000-4000-8000-000000000016');
+    expect(stored.status).toBe('disputed');
+  });
+
   it('rejects cancel when requester is not the order owner', async () => {
     m.store.orders.push({
       id: 'aaaa0007-0000-4000-8000-000000000007',
