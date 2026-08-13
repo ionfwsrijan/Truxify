@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import torch
 import json
+import re
 from datetime import datetime
 import logging
 
@@ -26,6 +27,35 @@ model = LogisticsFoundationModel(
 )
 trainer = FoundationModelTrainer(model, config)
 processor = LogisticsDataProcessor()
+
+ALLOWED_MODEL_NAME_RE = re.compile(r"^foundation_model(_v\d+)?\.pth$")
+ALLOWED_TASKS = {"classification", "regression", "generation"}
+
+
+def _resolve_model_path(path: str) -> str:
+    """Resolve a user-supplied model path inside the allowed ``models`` dir.
+
+    Rejects absolute paths and any ``..`` component so callers can never
+    escape the models directory, then enforces the model-name allowlist
+    (``foundation_model.pth`` / ``foundation_model_v{N}.pth``) and verifies
+    the resolved path stays inside ``models/``.
+    """
+    if (
+        os.path.isabs(path)
+        or path.startswith("/")
+        or path.startswith("\\")
+        or os.path.splitdrive(path)[0]
+    ):
+        raise HTTPException(status_code=400, detail="Invalid model path: absolute paths are not allowed")
+    if ".." in path.replace("\\", "/").split("/"):
+        raise HTTPException(status_code=400, detail="Invalid model path: path traversal is not allowed")
+    name = os.path.basename(path)
+    if not ALLOWED_MODEL_NAME_RE.match(name):
+        raise HTTPException(status_code=400, detail="Invalid model name")
+    safe_path = os.path.join("models", name)
+    if os.path.commonpath([os.path.abspath("models"), os.path.abspath(safe_path)]) != os.path.abspath("models"):
+        raise HTTPException(status_code=400, detail="Invalid model path: outside allowed directory")
+    return safe_path
 
 class GenerateDataRequest(BaseModel):
     num_samples: int = 1000
@@ -165,6 +195,8 @@ async def finetune_model(
 @router.post("/predict")
 async def predict(text: str, task: str = 'classification'):
     """Make prediction using foundation model"""
+    if task not in ALLOWED_TASKS:
+        raise HTTPException(status_code=400, detail="Invalid task")
     try:
         # Tokenize input
         tokens = processor.prepare_sequence(text)
@@ -235,8 +267,8 @@ async def get_model_info():
 
 @router.post("/save")
 async def save_model(path: str = "models/foundation_model.pth"):
-    path = os.path.join("models", os.path.basename(path))
     """Save foundation model"""
+    path = _resolve_model_path(path)
     try:
         trainer.save(path)
         processor.save_vocab()
@@ -253,8 +285,8 @@ async def save_model(path: str = "models/foundation_model.pth"):
 
 @router.post("/load")
 async def load_model(path: str = "models/foundation_model.pth"):
-    path = os.path.join("models", os.path.basename(path))
     """Load foundation model"""
+    path = _resolve_model_path(path)
     try:
         trainer.load(path)
         processor.load_vocab()
