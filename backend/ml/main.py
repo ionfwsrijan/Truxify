@@ -43,6 +43,7 @@ from app.models.price_prediction import (
 from app.execution import (
     run_inference,
     close_inference_executor,
+    close_training_executor,
     inference_capacity,
 )
 from app.models.bilateral_matcher import match_bilateral
@@ -118,8 +119,9 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    logger.info("ML Engine shutting down — releasing executor and HTTP clients")
+    logger.info("ML Engine shutting down — releasing executors and HTTP clients")
     close_inference_executor()
+    close_training_executor()
     close_weather_resources()
 
 
