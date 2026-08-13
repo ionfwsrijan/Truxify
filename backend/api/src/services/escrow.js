@@ -937,7 +937,7 @@ export async function verifyOnChainEscrowBalance(bookingId, expectedWei) {
   const onChainAmountBN = BigInt(bookingOnChain.amount.toString());
   const expectedWeiBN = BigInt(expectedWei);
   return {
-    valid: onChainAmountBN >= expectedWeiBN,
+    valid: onChainAmountBN === expectedWeiBN,
     onChainAmount: onChainAmountBN.toString(),
     expectedAmount: expectedWeiBN.toString()
   };
