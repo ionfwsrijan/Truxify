@@ -12,6 +12,32 @@ from cryptography.fernet import Fernet
 
 logger = logging.getLogger(__name__)
 
+def _load_or_create_encryption_key(key_file: str = None) -> bytes:
+    """Return a stable Fernet key: from env/file when present, otherwise generate and persist."""
+    env_key = os.environ.get('FEDERATED_ENCRYPTION_KEY')
+    if env_key:
+        return env_key.encode()
+
+    if key_file is None:
+        key_file = os.environ.get(
+            'FEDERATED_ENCRYPTION_KEY_FILE',
+            os.path.join('models', 'federated', 'encryption.key')
+        )
+    if os.path.exists(key_file):
+        with open(key_file, 'rb') as f:
+            key = f.read()
+        if key:
+            return key
+
+    key = Fernet.generate_key()
+    key_dir = os.path.dirname(key_file)
+    if key_dir:
+        os.makedirs(key_dir, exist_ok=True)
+    with open(key_file, 'wb') as f:
+        f.write(key)
+    logger.warning(f"Generated new federated encryption key and persisted it to {key_file}")
+    return key
+
 class FederatedServer:
     """Federated Learning Server for Driver Behavior Modeling"""
     
@@ -23,7 +49,7 @@ class FederatedServer:
         self.round = 0
         self.min_clients = 3
         self.clients_per_round = 5
-        self.encryption_key = Fernet.generate_key()
+        self.encryption_key = _load_or_create_encryption_key()
         self.cipher = Fernet(self.encryption_key)
         self.redis.setex('federated:encryption_key', 86400, self.encryption_key)
         

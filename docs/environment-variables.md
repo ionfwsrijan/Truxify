@@ -51,6 +51,8 @@ This document lists all environment variables used in the Truxify backend API (`
 | `ML_API_KEY` | Yes | - | API key for ML engine endpoints |
 | `ML_ENGINE_URL` | - | `http://localhost:8001` | Base URL for the ML inference service |
 | `ML_SERVICE_URL` | - | - | Alternative ML service URL |
+| `FEDERATED_ENCRYPTION_KEY` | - | - | Fernet key for federated weight encryption; persisted so restarts reuse the same key |
+| `FEDERATED_ENCRYPTION_KEY_FILE` | - | `models/federated/encryption.key` | Path where the federated encryption key is persisted if not provided via env |
 
 ## OSRM Routing
 
