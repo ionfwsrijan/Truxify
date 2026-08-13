@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/subtle"
 	"encoding/json"
@@ -29,6 +30,23 @@ type LogEntry struct {
 	Command   string    `json:"command"`
 	OrderID   string    `json:"order_id"`
 	Timestamp time.Time `json:"timestamp"`
+}
+
+// raftRecordType identifies the two kinds of records written to the
+// append-only raft log: committed entries and term/vote state.
+const (
+	raftRecordEntry = "entry"
+	raftRecordTerm  = "term"
+)
+
+// raftRecord is one JSON line in the append-only raft log. Entry records
+// carry committed log entries; term records persist currentTerm/votedFor so
+// the at-most-one-vote-per-term guarantee survives a restart (Raft §5.2).
+type raftRecord struct {
+	Type     string    `json:"type"`
+	Entry    *LogEntry `json:"entry,omitempty"`
+	Term     uint64    `json:"term,omitempty"`
+	VotedFor string    `json:"voted_for,omitempty"`
 }
 
 // RequestVoteRequest is the Raft RequestVote RPC payload.
@@ -159,6 +177,12 @@ type RaftNode struct {
 	// never accepts new entries without evidence of a reachable quorum.
 	liveAck            map[string]bool
 	httpClient         *http.Client
+
+	// raftLog is the open handle for this node's append-only durable log;
+	// nil when persistence is disabled (RAFT_STATE_FILE=none). persistedIndex
+	// is the highest log index already flushed to disk.
+	raftLog        *os.File
+	persistedIndex uint64
 }
 
 // rng is a source of randomness for election timeouts.
@@ -172,7 +196,7 @@ func NewRaftNode(id string, peers []string, peerURLs []string) *RaftNode {
 		electionMaxMs = electionMinMs
 	}
 
-	return &RaftNode{
+	rn := &RaftNode{
 		NodeID:             id,
 		CurrentTerm:        0,
 		Role:               Follower,
@@ -189,6 +213,120 @@ func NewRaftNode(id string, peers []string, peerURLs []string) *RaftNode {
 		matchIndex:         make(map[string]uint64),
 		liveAck:            make(map[string]bool),
 		httpClient:         &http.Client{Timeout: 500 * time.Millisecond},
+	}
+	rn.loadState()
+	return rn
+}
+
+// stateFilePath returns the append-only raft log path for this node. A value
+// of "none" disables persistence; when unset the log is written to
+// raft_state_<node_id>.json in the working directory.
+func (rn *RaftNode) stateFilePath() string {
+	path := os.Getenv("RAFT_STATE_FILE")
+	if path == "none" {
+		return ""
+	}
+	if path == "" {
+		path = "raft_state_" + rn.NodeID + ".json"
+	}
+	return path
+}
+
+// appendRecordLocked writes one JSON record line to the append-only raft log
+// and fsyncs it so a completed write survives a crash. It must be called while
+// holding rn.mu.
+func (rn *RaftNode) appendRecordLocked(rec raftRecord) error {
+	if rn.raftLog == nil {
+		return nil
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	if _, err := rn.raftLog.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	return rn.raftLog.Sync()
+}
+
+// persistCommittedLocked flushes the committed log entries in
+// (persistedIndex, CommitIndex] to the append-only raft log so committed state
+// survives a restart. It must be called while holding rn.mu.
+func (rn *RaftNode) persistCommittedLocked() error {
+	for i := rn.persistedIndex + 1; i <= rn.CommitIndex; i++ {
+		if i > uint64(len(rn.Log)) {
+			break
+		}
+		entry := rn.Log[i-1]
+		if err := rn.appendRecordLocked(raftRecord{Type: raftRecordEntry, Entry: &entry}); err != nil {
+			return err
+		}
+		rn.persistedIndex = i
+	}
+	return nil
+}
+
+// persistTermLocked records the current term and vote to the append-only raft
+// log before any RPC that depends on vote safety is acknowledged. Errors are
+// logged so the cluster keeps running; term/vote persistence is best effort.
+func (rn *RaftNode) persistTermLocked() {
+	if err := rn.appendRecordLocked(raftRecord{
+		Type:     raftRecordTerm,
+		Term:     rn.CurrentTerm,
+		VotedFor: rn.VotedFor,
+	}); err != nil {
+		log.Printf("[%s] Error persisting raft term/vote: %v", rn.NodeID, err)
+	}
+}
+
+// loadState replays the append-only raft log on startup, restoring committed
+// log entries plus the latest currentTerm/votedFor. A trailing partial record
+// left by a crash mid-append is ignored; everything after it is not
+// trustworthy either, so replay stops at the first unparseable line.
+func (rn *RaftNode) loadState() {
+	path := rn.stateFilePath()
+	if path == "" {
+		return
+	}
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
+	if err != nil {
+		log.Printf("[%s] Error opening raft log %s: %v", rn.NodeID, path, err)
+		return
+	}
+	rn.raftLog = f
+
+	scanner := bufio.NewScanner(f)
+	entries := 0
+	for scanner.Scan() {
+		var rec raftRecord
+		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+			break
+		}
+		switch rec.Type {
+		case raftRecordEntry:
+			if rec.Entry != nil && rec.Entry.Index == uint64(entries)+1 {
+				rn.Log = append(rn.Log, *rec.Entry)
+				entries++
+			}
+		case raftRecordTerm:
+			rn.CurrentTerm = rec.Term
+			rn.VotedFor = rec.VotedFor
+		}
+	}
+
+	// The log file only ever holds committed entries, so everything replayed
+	// is already committed and applied.
+	rn.CommitIndex = uint64(entries)
+	rn.LastApplied = rn.CommitIndex
+	rn.persistedIndex = rn.CommitIndex
+	// A node must never restart with a term below its log's highest term.
+	if rn.CurrentTerm < rn.lastLogTerm() {
+		rn.CurrentTerm = rn.lastLogTerm()
+	}
+	if entries > 0 || rn.CurrentTerm > 0 {
+		log.Printf("[%s] Restored raft state from %s: entries=%d term=%d voted_for=%q",
+			rn.NodeID, path, entries, rn.CurrentTerm, rn.VotedFor)
 	}
 }
 
@@ -225,6 +363,7 @@ func (rn *RaftNode) stepDownLocked(term uint64) {
 		rn.Role = Follower
 	}
 	rn.lastLeaderSeen = time.Now()
+	rn.persistTermLocked()
 }
 
 // startElection campaigns for leadership: bump term, vote for self, and
@@ -238,6 +377,7 @@ func (rn *RaftNode) startElection() {
 	rn.LeaderID = ""
 	rn.electionStarted = time.Now()
 	rn.electionTimeout = rn.randomElectionTimeout()
+	rn.persistTermLocked()
 
 	req := RequestVoteRequest{
 		Term:         rn.CurrentTerm,
@@ -606,6 +746,7 @@ func (rn *RaftNode) HandleVote(w http.ResponseWriter, r *http.Request) {
 		rn.VotedFor = req.CandidateID
 		rn.lastLeaderSeen = time.Now()
 		resp.VoteGranted = true
+		rn.persistTermLocked()
 	}
 
 	resp.Term = rn.CurrentTerm
@@ -653,6 +794,7 @@ func (rn *RaftNode) HandleAppend(w http.ResponseWriter, r *http.Request) {
 		// cannot obtain a second vote.
 		if rn.VotedFor == "" || rn.VotedFor == req.LeaderID {
 			rn.VotedFor = req.LeaderID
+			rn.persistTermLocked()
 		}
 		rn.lastLeaderSeen = time.Now()
 
@@ -671,6 +813,13 @@ func (rn *RaftNode) HandleAppend(w http.ResponseWriter, r *http.Request) {
 			// LastApplied stayed at 0 forever while CommitIndex grew.
 			if rn.CommitIndex > rn.LastApplied {
 				rn.LastApplied = rn.CommitIndex
+			}
+			// Persist the newly committed prefix before acking so a follower
+			// never forgets entries the leader committed.
+			if rn.CommitIndex > rn.persistedIndex {
+				if err := rn.persistCommittedLocked(); err != nil {
+					log.Printf("[%s] Error persisting committed entries: %v", rn.NodeID, err)
+				}
 			}
 			resp.Success = true
 		}
@@ -826,6 +975,21 @@ func (rn *RaftNode) HandleCommitOrder(w http.ResponseWriter, r *http.Request) {
 
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
+
+	// Flush the committed entry to the append-only raft log and fsync it before
+	// returning success: a client-observed commit must survive a restart (Raft
+	// §5.2, §5.4). If the entry cannot be made durable, do not ack it.
+	if err := rn.persistCommittedLocked(); err != nil {
+		log.Printf("[%s] Error persisting committed entry %d: %v", rn.NodeID, entry.Index, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":    false,
+			"error":      "failed to persist committed entry",
+			"raft_index": entry.Index,
+		})
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
