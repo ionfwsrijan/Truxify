@@ -1,3 +1,4 @@
+import { supabaseAdmin } from '../config/db.js';
 import { getRequestCache } from '../lib/requestContext.js';
 import { executeWithRetry, isRetryable } from '../core/retry.js';
 import { measureExecution } from '../core/performanceMetrics.js';
@@ -133,32 +134,29 @@ export class OrderRepository {
       .maybeSingle(), 'findOrderForTimeline');
   } 
 
-  async updateOrder(id, updates, eventType = null) {
-  const result = await this._retryableQuery(() => this.supabase
-    .from('orders')
-    .update(updates)
-    .eq('id', id)
-    .select('*')
-    .single(), 'updateOrder');
+  async updateOrder(id, updates, eventType = null, client = null) {
+    // Atomic path: the order UPDATE and the outbox_events INSERT run inside a
+    // single DB transaction (update_order_with_outbox_tx), so the event can
+    // never be lost if the process crashes between the two writes.
+    if (eventType) {
+      return this._retryableQuery(async () => {
+        const { data, error } = await (client ?? supabaseAdmin ?? this.supabase)
+          .rpc('update_order_with_outbox_tx', {
+            p_order_id: id,
+            p_updates: updates,
+            p_event_type: eventType,
+          });
+        return { data: data?.[0] ?? null, error };
+      }, 'updateOrder');
+    }
 
-  // Write outbox event after successful mutation — best-effort, never throws.
-  if (!result.error && result.data && eventType) {
-    const { outboxService } = await import('../services/outbox/outboxService.js');
-    await outboxService.writeEvent({
-      aggregateId: result.data.order_display_id || id,
-      aggregateType: 'order',
-      eventType,
-      payload: {
-        orderId: id,
-        orderDisplayId: result.data.order_display_id,
-        status: result.data.status,
-        updates,
-      },
-    });
+    return this._retryableQuery(() => this.supabase
+      .from('orders')
+      .update(updates)
+      .eq('id', id)
+      .select('*')
+      .single(), 'updateOrder');
   }
-
-  return result;
-}
 
   async updateOrderWithFilter(id, updates, filters, selectColumns) {
     return this._retryableQuery(() => {

@@ -15,6 +15,7 @@ const REQUIRED_RPC_FUNCTIONS = [
   'release_escrow_tx',
   'refund_escrow_tx',
   'update_trip_status_tx',
+  'update_order_with_outbox_tx',
 ];
 
 const REQUIRED_INDEXES = [
