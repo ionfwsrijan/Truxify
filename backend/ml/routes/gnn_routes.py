@@ -79,7 +79,7 @@ async def optimize_route(request: RouteRequest):
         )
         
         # Get PyTorch data
-        graph_data = builder.get_pytorch_data()
+        graph_data = builder.get_pytorch_data(graph)
         
         # Optimize route
         result = optimizer.optimize_route(
@@ -117,7 +117,7 @@ async def multi_objective_optimize(request: RouteRequest):
             [edge.dict() for edge in request.edges]
         )
         
-        graph_data = builder.get_pytorch_data()
+        graph_data = builder.get_pytorch_data(graph)
         
         result = optimizer.multi_objective_optimization(
             request.start_node,

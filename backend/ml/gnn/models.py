@@ -71,15 +71,16 @@ class GraphNetworkBuilder:
     """Build road network graphs for GNN"""
     
     def __init__(self):
-        self.graph = nx.Graph()
         self.node_features = {}
         self.edge_features = {}
         
     def build_road_network(self, nodes, edges):
-        """Build road network from nodes and edges"""
+        """Build a fresh road network from nodes and edges"""
+        graph = nx.Graph()
+
         # Add nodes
         for node in nodes:
-            self.graph.add_node(
+            graph.add_node(
                 node['id'],
                 lat=node['lat'],
                 lng=node['lng'],
@@ -90,7 +91,7 @@ class GraphNetworkBuilder:
             
         # Add edges
         for edge in edges:
-            self.graph.add_edge(
+            graph.add_edge(
                 edge['source'],
                 edge['target'],
                 distance=edge['distance'],
@@ -100,17 +101,17 @@ class GraphNetworkBuilder:
                 congestion=edge.get('congestion', 0)
             )
             
-        return self.graph
+        return graph
     
-    def extract_features(self):
-        """Extract node and edge features"""
+    def extract_features(self, graph):
+        """Extract node and edge features from the given graph"""
         node_features = []
         edge_indices = []
         edge_features = []
         
         # Node features
         node_map = {}
-        for i, (node, data) in enumerate(self.graph.nodes(data=True)):
+        for i, (node, data) in enumerate(graph.nodes(data=True)):
             node_map[node] = i
             features = [
                 data.get('lat', 0),
@@ -122,7 +123,7 @@ class GraphNetworkBuilder:
             node_features.append(features)
         
         # Edge features
-        for u, v, data in self.graph.edges(data=True):
+        for u, v, data in graph.edges(data=True):
             edge_indices.append([node_map[u], node_map[v]])
             edge_features.append([
                 data.get('distance', 0) / 100,
@@ -132,12 +133,11 @@ class GraphNetworkBuilder:
                 data.get('congestion', 0)
             ])
 
-        self.node_map = node_map
-
         return {
             'node_features': torch.tensor(node_features, dtype=torch.float),
             'edge_indices': torch.tensor(edge_indices, dtype=torch.long).t().contiguous(),
-            'edge_features': torch.tensor(edge_features, dtype=torch.float)
+            'edge_features': torch.tensor(edge_features, dtype=torch.float),
+            'node_map': node_map
         }
     
     def _road_type_encoding(self, road_type):
@@ -148,16 +148,16 @@ class GraphNetworkBuilder:
             encoding[types.index(road_type)] = 1
         return encoding
     
-    def get_pytorch_data(self):
-        """Convert to PyTorch Geometric Data object"""
-        features = self.extract_features()
+    def get_pytorch_data(self, graph):
+        """Convert the given graph to a PyTorch Geometric Data object"""
+        features = self.extract_features(graph)
         data = Data(
             x=features['node_features'],
             edge_index=features['edge_indices'],
             edge_attr=features['edge_features']
         )
-        data.graph = self.graph
-        data.node_map = self.node_map
+        data.graph = graph
+        data.node_map = features['node_map']
         return data
 
 class RouteOptimizer:
