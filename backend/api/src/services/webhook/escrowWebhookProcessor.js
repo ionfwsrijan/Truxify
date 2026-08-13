@@ -51,7 +51,7 @@ async function findOrderByIdOrDisplayId(orderId) {
 
 async function reconcileWalletLedger(order, txHash) {
   if (!order.driver_id) {
-    return;
+    return { confirmed: false, matched: false };
   }
   const { data, error } = await requireDb()
     .from('wallet_transactions')
@@ -68,12 +68,21 @@ async function reconcileWalletLedger(order, txHash) {
     throw new Error(`Failed to reconcile wallet ledger for ${order.order_display_id}: ${error.message}`);
   }
 
-  if (!data || data.length === 0) {
-    throw new Error(
-      `Wallet ledger reconciliation matched no credit transaction for order ${order.order_display_id} ` +
-        `(driver ${order.driver_id}) — driver payout may be unconfirmed`
+  const matched = Boolean(data && data.length > 0);
+  if (!matched) {
+    logger.warn(
+      {
+        event: 'escrow_event_unreconciled',
+        orderId: order.id,
+        orderDisplayId: order.order_display_id,
+        driverId: order.driver_id,
+        txHash: txHash || null,
+      },
+      `[Webhook] Order ${order.order_display_id} wallet ledger matched no credit transaction for driver ${order.driver_id} — ` +
+        `payout remains unconfirmed; flagged for out-of-band reconciliation`
     );
   }
+  return { confirmed: matched, matched };
 }
 
 async function getPolygonProvider() {

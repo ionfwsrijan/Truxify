@@ -8,6 +8,8 @@ vi.mock('../../src/middleware/logger.js', () => ({
   },
 }));
 
+import logger from '../../src/middleware/logger.js';
+
 const mockGetTransactionReceipt = vi.fn();
 vi.mock('ethers', () => ({
   ethers: {
