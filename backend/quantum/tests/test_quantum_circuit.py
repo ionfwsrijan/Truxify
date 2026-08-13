@@ -1,13 +1,25 @@
 import os
 import sys
+from unittest import mock
 
 import networkx as nx
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from quantum_circuit import QUBOFormatter  # noqa: E402
+from quantum_circuit import QUBOFormatter, QuantumCircuitDesigner  # noqa: E402
 
 from qiskit_algorithms.minimum_eigensolvers import NumPyMinimumEigensolver  # noqa: E402
+
+
+class _FakeJob:
+    """Fake AerSimulator job returning empty counts."""
+
+    def result(self):
+        class _FakeResult:
+            def get_counts(self):
+                return {}
+
+        return _FakeResult()
 
 
 def _selected_edges(formatter, result):
@@ -70,3 +82,18 @@ def test_route_optimization_triangle():
     assert len(selected) >= 1
     degrees = _node_degrees(selected, list(graph.nodes()))
     assert all(d == 2 for d in degrees.values())
+
+
+def test_run_circuit_empty_counts_does_not_raise():
+    designer = QuantumCircuitDesigner(num_qubits=2)
+    circuit = designer.create_basic_circuit()
+
+    with mock.patch('quantum_circuit.AerSimulator') as mock_simulator, \
+            mock.patch('qiskit.transpile', return_value=circuit):
+        mock_simulator.return_value.run.return_value = _FakeJob()
+        result = designer.run_circuit(circuit, shots=1024)
+
+    assert result['success'] is True
+    assert result['counts'] == {}
+    assert result['most_frequent'] is None
+    assert 'warning' in result

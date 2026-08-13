@@ -82,6 +82,15 @@ class QuantumCircuitDesigner:
             # Get counts
             counts = result.get_counts()
             
+            if not counts:
+                return {
+                    'success': True,
+                    'counts': counts,
+                    'shots': shots,
+                    'most_frequent': None,
+                    'warning': 'No counts returned; circuit likely lacks measurement gates'
+                }
+            
             return {
                 'success': True,
                 'counts': counts,
