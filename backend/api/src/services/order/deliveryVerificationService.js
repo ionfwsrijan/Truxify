@@ -108,6 +108,19 @@ export class DeliveryVerificationService {
           order.status === "payment_released" &&
           ["funded", "release_failed"].includes(order.escrow_status);
 
+        // Idempotency (issue #11245): an order that was fully verified on a
+        // previous attempt (escrow released + trip finalized) has no active
+        // OTP left to validate — it was consumed. Treat re-verification as a
+        // no-op so a network retry after a successful verification returns
+        // success instead of failing or re-running release side effects.
+        const isAlreadyVerified =
+          order.status === "payment_released" &&
+          order.escrow_status === "released";
+
+        if (isAlreadyVerified) {
+          return { order, otpRecord: null, alreadyVerified: true };
+        }
+
         if (
           !DELIVERY_OTP_READY_STATUSES.has(order.status) &&
           !isRetryForStuckEscrow
@@ -481,11 +494,20 @@ export class DeliveryVerificationService {
     return measureExecution(
       "DeliveryVerificationService.verifyDelivery",
       async () => {
-        const { order, otpRecord } = await this.validateDeliveryOtp({
-          orderId,
-          driverId,
-          otp,
-        });
+        const { order, otpRecord, alreadyVerified } =
+          await this.validateDeliveryOtp({
+            orderId,
+            driverId,
+            otp,
+          });
+
+        // The order was already fully verified on a previous attempt (issue
+        // #11245). Return success without re-applying any side effects —
+        // escrow release, trip completion, wallet credit and notifications
+        // already ran exactly once.
+        if (alreadyVerified) {
+          return { escrowUpdateFailed: false };
+        }
 
         const isRetryForStuckEscrow =
           order.status === "payment_released" &&

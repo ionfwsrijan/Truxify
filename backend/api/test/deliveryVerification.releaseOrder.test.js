@@ -449,3 +449,72 @@ describe('verifyDelivery stuck-escrow retry release confirmation (issue #7732)',
     );
   });
 });
+
+describe('verifyDelivery idempotency for already-verified orders (issue #11245)', () => {
+  function makeAlreadyVerifiedService() {
+    const repo = {
+      findOrderById: vi.fn().mockResolvedValue({
+        data: { ...ORDER, status: 'payment_released', escrow_status: 'released' },
+        error: null,
+      }),
+      updateOrder: vi.fn().mockResolvedValue({ data: { id: 'order-1' }, error: null }),
+      updateOrderGuardStatus: vi.fn().mockResolvedValue({ data: { id: 'order-1' }, error: null }),
+      executeRpc: vi.fn().mockResolvedValue({ data: null, error: null }),
+      updateWalletTransaction: vi.fn().mockResolvedValue({ data: null, error: null }),
+    };
+    const escrowReleaseFn = vi.fn().mockResolvedValue({ txHash: '0xNOOP' });
+    const trackingTokenService = { revokeAllForOrder: vi.fn().mockResolvedValue() };
+    const notificationService = {
+      getActiveDeliveryOtp: vi.fn().mockResolvedValue({ id: 'otp-1' }),
+      verifyDeliveryOtpHash: vi.fn().mockReturnValue(true),
+      verifyDeliveryOtp: vi.fn().mockResolvedValue(true),
+      storeDeliveryOtp: vi.fn().mockResolvedValue(true),
+      sendDeliveryOtpNotification: vi.fn().mockResolvedValue({ success: true }),
+    };
+    const svc = new DeliveryVerificationService(null, {
+      notificationService,
+      escrowReleaseFn,
+      trackingTokenService,
+    });
+    svc.orderRepository = repo;
+    svc.assertDriverAtDropoff = vi.fn().mockResolvedValue();
+    return { svc, repo, escrowReleaseFn, trackingTokenService, notificationService };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns success without re-applying side effects when the order was already verified', async () => {
+    const { svc, repo, escrowReleaseFn, trackingTokenService, notificationService } =
+      makeAlreadyVerifiedService();
+
+    const result = await svc.verifyDelivery(
+      { orderId: 'order-1', driverId: 'driver-1', otp: '123456' },
+      {},
+    );
+
+    expect(result).toEqual({ escrowUpdateFailed: false });
+    expect(escrowReleaseFn).not.toHaveBeenCalled();
+    expect(repo.executeRpc).not.toHaveBeenCalled();
+    expect(repo.updateOrder).not.toHaveBeenCalled();
+    expect(repo.updateOrderGuardStatus).not.toHaveBeenCalled();
+    expect(repo.updateWalletTransaction).not.toHaveBeenCalled();
+    expect(trackingTokenService.revokeAllForOrder).not.toHaveBeenCalled();
+    expect(notificationService.getActiveDeliveryOtp).not.toHaveBeenCalled();
+    expect(notificationService.verifyDeliveryOtp).not.toHaveBeenCalled();
+    expect(svc.assertDriverAtDropoff).not.toHaveBeenCalled();
+  });
+
+  it('is still idempotent for a retry with a different OTP once the order is verified', async () => {
+    const { svc, escrowReleaseFn } = makeAlreadyVerifiedService();
+
+    const result = await svc.verifyDelivery(
+      { orderId: 'order-1', driverId: 'driver-1', otp: '999999' },
+      {},
+    );
+
+    expect(result).toEqual({ escrowUpdateFailed: false });
+    expect(escrowReleaseFn).not.toHaveBeenCalled();
+  });
+});
