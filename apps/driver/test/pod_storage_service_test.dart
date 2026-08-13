@@ -41,6 +41,9 @@ void main() {
         signaturePath: '/path/to/sign.png',
         photoPath: '/path/to/photo.jpg',
         synced: 0,
+        retryCount: 3,
+        lastRetryAt: 1234567890,
+        lastError: 'boom',
         createdAt: 1234567890,
       );
 
@@ -50,6 +53,9 @@ void main() {
       expect(map['signature_path'], '/path/to/sign.png');
       expect(map['photo_path'], '/path/to/photo.jpg');
       expect(map['synced'], 0);
+      expect(map['retry_count'], 3);
+      expect(map['last_retry_at'], 1234567890);
+      expect(map['last_error'], 'boom');
       expect(map['created_at'], 1234567890);
     });
 
@@ -60,6 +66,9 @@ void main() {
         'signature_path': '/sig/path',
         'photo_path': '/photo/path',
         'synced': 1,
+        'retry_count': 4,
+        'last_retry_at': 1111111111,
+        'last_error': 'timeout',
         'created_at': 9876543210,
       };
 
@@ -69,6 +78,9 @@ void main() {
       expect(record.signaturePath, '/sig/path');
       expect(record.photoPath, '/photo/path');
       expect(record.synced, 1);
+      expect(record.retryCount, 4);
+      expect(record.lastRetryAt, 1111111111);
+      expect(record.lastError, 'timeout');
       expect(record.createdAt, 9876543210);
     });
 
@@ -85,6 +97,9 @@ void main() {
       final record = PodRecord.fromMap(map);
       expect(record.signaturePath, isNull);
       expect(record.photoPath, isNull);
+      expect(record.retryCount, 0);
+      expect(record.lastRetryAt, isNull);
+      expect(record.lastError, isNull);
     });
   });
 }

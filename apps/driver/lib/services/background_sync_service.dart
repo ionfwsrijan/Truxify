@@ -12,6 +12,16 @@ import 'secure_storage.dart';
 
 const syncTaskName = 'syncPendingPods';
 
+/// A POD that failed this many times is promoted to the dead-letter table
+/// instead of retrying forever and clogging the queue (issue #11231).
+const maxSyncRetries = 10;
+
+/// Exponential retry backoff in minutes, mirroring the DLQ ladder in
+/// backend/api/src/services/webhook/dlqService.js: after [retryCount]
+/// failures the next attempt is gated to [lastRetryAt] + backoff[retryCount].
+/// Capped at 24 hours (1440 minutes).
+const List<int> syncRetryBackoffMinutes = [1, 5, 30, 120, 360, 1440];
+
 @pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
@@ -31,6 +41,16 @@ class BackgroundSyncService {
   /// the task is registered exactly once without a platform channel.
   @visibleForTesting
   static void Function()? scheduleTaskOverride;
+
+  /// Minutes to wait before retrying a POD that has already failed
+  /// [retryCount] times. Repeats the 24h cap for any count past the ladder.
+  @visibleForTesting
+  static int syncRetryDelayMinutes(int retryCount) {
+    if (retryCount < syncRetryBackoffMinutes.length) {
+      return syncRetryBackoffMinutes[retryCount];
+    }
+    return syncRetryBackoffMinutes.last;
+  }
 
   static void initialize() {
     Workmanager().initialize(
@@ -105,6 +125,22 @@ class BackgroundSyncService {
       
       for (final pod in pendingPods) {
         try {
+          if (pod.retryCount >= maxSyncRetries) {
+            // Permanently failing PODs (corrupted file, deleted order) go to
+            // the dead-letter table for manual review instead of blocking the
+            // queue (issue #11231).
+            await podStorageService.moveToDeadLetter(pod);
+            continue;
+          }
+
+          final now = DateTime.now().millisecondsSinceEpoch;
+          if (pod.lastRetryAt != null) {
+            final delayMs = syncRetryDelayMinutes(pod.retryCount) * 60 * 1000;
+            if (now - pod.lastRetryAt! < delayMs) {
+              continue; // Not ready to retry yet — exponential backoff.
+            }
+          }
+
           final uri = apiBaseUri.replace(
             path: '${apiBaseUri.path}/api/orders/${pod.orderId}/pod'
                 .replaceAll(RegExp(r'/+'), '/'),
@@ -139,9 +175,23 @@ class BackgroundSyncService {
           final response = await request.send();
           if (response.statusCode >= 200 && response.statusCode < 300) {
             await podStorageService.markAsSynced(pod.id!);
+          } else {
+            await podStorageService.recordRetry(
+              pod.id!,
+              pod.retryCount + 1,
+              DateTime.now().millisecondsSinceEpoch,
+              'Upload failed with status ${response.statusCode}',
+            );
           }
         } catch (e) {
-          // Will retry on next background sync
+          // Record the failure so the next attempt is gated by the exponential
+          // backoff ladder; after maxSyncRetries the POD is dead-lettered.
+          await podStorageService.recordRetry(
+            pod.id!,
+            pod.retryCount + 1,
+            DateTime.now().millisecondsSinceEpoch,
+            e.toString(),
+          );
         }
       }
     } finally {
