@@ -257,19 +257,26 @@ class ShardManager {
   }
 
   async executeCrossShardQuery(queries) {
-    // Execute same query across all shards and combine results
+    // Execute same query across all shards and combine results. Failures are
+    // collected and returned so a partial aggregate can never masquerade as a
+    // complete one (issue #11250).
     const results = [];
+    const failedShards = [];
     for (const [name, shard] of this.shards) {
-      if (shard.pool) {
-        try {
-          const result = await shard.pool.query(queries.query, queries.params || []);
-          results.push({ shard: name, data: result.rows });
-        } catch (error) {
-          logger.error(`Error querying shard ${name}:`, error);
-        }
+      if (!shard.pool) {
+        logger.error(`Shard ${name} not initialized, skipping cross-shard query`);
+        failedShards.push(name);
+        continue;
+      }
+      try {
+        const result = await shard.pool.query(queries.query, queries.params || []);
+        results.push({ shard: name, data: result.rows });
+      } catch (error) {
+        logger.error(`Error querying shard ${name}:`, error);
+        failedShards.push(name);
       }
     }
-    return results;
+    return { results, failed: failedShards, partial: failedShards.length > 0 };
   }
 
   async healthCheck() {

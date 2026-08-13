@@ -16,7 +16,10 @@ vi.mock('../../src/middleware/requirePolicy.js', () => ({
 
 vi.mock('../../src/middleware/shardMiddleware.js', () => ({
   shardMiddleware: (req, _res, next) => next(),
-  crossShardQuery: (req, _res, next) => next(),
+  crossShardQuery: (req, _res, next) => {
+    req.executeCrossShard = (query, params) => shardManagerMock.executeCrossShardQuery({ query, params });
+    next();
+  },
 }));
 
 const { shardManagerMock } = vi.hoisted(() => ({
@@ -94,6 +97,40 @@ describe('shardRoutes coordinate validation', () => {
       const res = await request(makeApp()).get('/shards/status');
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual({ north: 'healthy' });
+    });
+  });
+
+  describe('GET /shards/all/orders', () => {
+    it('returns success with a full aggregate when all shards respond', async () => {
+      shardManagerMock.executeCrossShardQuery.mockResolvedValue({
+        results: [
+          { shard: 'north', data: [{ total: 4 }] },
+          { shard: 'south', data: [{ total: 6 }] },
+        ],
+        failed: [],
+        partial: false,
+      });
+      const res = await request(makeApp()).get('/shards/all/orders');
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.total).toBe(10);
+      expect(res.body.data.shards).toHaveLength(2);
+    });
+
+    it('surfaces shard failures instead of returning silent success', async () => {
+      shardManagerMock.executeCrossShardQuery.mockResolvedValue({
+        results: [
+          { shard: 'north', data: [{ total: 4 }] },
+        ],
+        failed: ['south', 'east'],
+        partial: true,
+      });
+      const res = await request(makeApp()).get('/shards/all/orders');
+      expect(res.status).toBe(503);
+      expect(res.body.success).toBe(false);
+      expect(res.body.partial).toBe(true);
+      expect(res.body.warning).toBe('results partially unavailable');
+      expect(res.body.data.failedShards).toEqual(['south', 'east']);
     });
   });
 });
