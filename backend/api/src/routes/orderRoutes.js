@@ -188,7 +188,7 @@ import {
 } from '../core/container.js';
 import { getEscrowBookingId, resolveExpectedDepositAmount, paisaToMaticWei, submitEscrowRefund } from '../services/escrow.js';
 
-import { getRouteEstimate, getRouteGeometry, buildStraightLineGeometry } from '../services/osrm.js';
+import { getRouteEstimate, getRouteGeometry, buildStraightLineGeometry, validateCoordinates } from '../services/osrm.js';
 import { computeOrderPricing } from '../lib/pricing.js';
 
 const router = express.Router();
@@ -464,6 +464,18 @@ router.put('/:id/change-drop', authenticate, userLimiter, changeDropLimiter, req
     orderValidationService.assertCustomerOwnership(order, req.user.id);
     orderValidationService.assertChangeDropAllowed(order);
     orderValidationService.assertHasWeight(order);
+
+    // Reject implausible coordinates (out-of-range lat/lng) before pricing,
+    // matching the coordinate validation used at order creation time.
+    const coordinateError = validateCoordinates(
+      Number(order.pickup_lat),
+      Number(order.pickup_lng),
+      Number(drop_lat),
+      Number(drop_lng),
+    );
+    if (coordinateError) {
+      throw new DomainError(400, { error: coordinateError });
+    }
 
     let pricing;
     try {

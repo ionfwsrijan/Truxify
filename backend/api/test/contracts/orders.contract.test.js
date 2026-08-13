@@ -26,6 +26,16 @@ vi.mock('../../src/sockets/tracker.js', () => ({
 
 vi.mock('../../src/services/osrm.js', () => ({
   getRouteEstimate: routeEstimateMock,
+  validateCoordinates: (pickupLat, pickupLng, dropLat, dropLng) => {
+    if (![pickupLat, pickupLng, dropLat, dropLng].every(Number.isFinite)) {
+      return 'Invalid coordinates provided.';
+    }
+    if (pickupLat < -90 || pickupLat > 90) return 'pickup_lat must be between -90 and 90.';
+    if (pickupLng < -180 || pickupLng > 180) return 'pickup_lng must be between -180 and 180.';
+    if (dropLat < -90 || dropLat > 90) return 'drop_lat must be between -90 and 90.';
+    if (dropLng < -180 || dropLng > 180) return 'drop_lng must be between -180 and 180.';
+    return null;
+  }
 }));
 
 vi.mock('../../src/services/reputation.js', () => ({

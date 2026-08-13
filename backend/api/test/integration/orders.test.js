@@ -119,7 +119,17 @@ vi.mock('../../src/sockets/tracker.js', () => ({
 }));
 
 vi.mock('../../src/services/osrm.js', () => ({
-  getRouteEstimate: routeEstimateMock
+  getRouteEstimate: routeEstimateMock,
+  validateCoordinates: (pickupLat, pickupLng, dropLat, dropLng) => {
+    if (![pickupLat, pickupLng, dropLat, dropLng].every(Number.isFinite)) {
+      return 'Invalid coordinates provided.';
+    }
+    if (pickupLat < -90 || pickupLat > 90) return 'pickup_lat must be between -90 and 90.';
+    if (pickupLng < -180 || pickupLng > 180) return 'pickup_lng must be between -180 and 180.';
+    if (dropLat < -90 || dropLat > 90) return 'drop_lat must be between -90 and 90.';
+    if (dropLng < -180 || dropLng > 180) return 'drop_lng must be between -180 and 180.';
+    return null;
+  }
 }));
 
 // Mock reputation service so tests never hit a real blockchain node.
@@ -2401,6 +2411,80 @@ describe('Customer actions: change-drop and cancel endpoints', () => {
     expect(res.status).toBe(409);
     expect(res.body).toHaveProperty('error');
     expect(res.body).toHaveProperty('recovery');
+  });
+
+  it('blocks change-drop with 409 once the trip has started', async () => {
+    m.store.orders.push(
+      {
+        id: 'aaaa0013-0000-4000-8000-000000000013',
+        customer_id: CUSTOMER_HEADERS['x-user-id'],
+        order_display_id: 'OD-PICKED-UP',
+        pickup_lat: 19.076,
+        pickup_lng: 72.8777,
+        drop_lat: 28.7041,
+        drop_lng: 77.1025,
+        weight_tonnes: 3,
+        status: 'picked_up'
+      },
+      {
+        id: 'aaaa0014-0000-4000-8000-000000000014',
+        customer_id: CUSTOMER_HEADERS['x-user-id'],
+        order_display_id: 'OD-IN-TRANSIT',
+        pickup_lat: 19.076,
+        pickup_lng: 72.8777,
+        drop_lat: 28.7041,
+        drop_lng: 77.1025,
+        weight_tonnes: 3,
+        status: 'in_transit'
+      }
+    );
+
+    const app = buildApp();
+
+    for (const orderId of ['aaaa0013-0000-4000-8000-000000000013', 'aaaa0014-0000-4000-8000-000000000014']) {
+      const res = await request(app)
+        .put(`/api/orders/${orderId}/change-drop`)
+        .set(CUSTOMER_HEADERS)
+        .send({
+          drop_address: 'New Drop Place',
+          drop_lat: 22.22,
+          drop_lng: 88.88
+        });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toContain('Drop location cannot be changed');
+      expect(res.body).toHaveProperty('recovery');
+    }
+  });
+
+  it('returns 400 when the stored order coordinates are implausible during change-drop', async () => {
+    m.store.orders.push({
+      id: 'aaaa0015-0000-4000-8000-000000000015',
+      customer_id: CUSTOMER_HEADERS['x-user-id'],
+      order_display_id: 'OD-BAD-PICKUP',
+      pickup_lat: 91,
+      pickup_lng: 72.8777,
+      drop_lat: 28.7041,
+      drop_lng: 77.1025,
+      weight_tonnes: 3,
+      is_fragile: false,
+      is_stackable: true,
+      status: 'pending'
+    });
+
+    const app = buildApp();
+
+    const res = await request(app)
+      .put('/api/orders/aaaa0015-0000-4000-8000-000000000015/change-drop')
+      .set(CUSTOMER_HEADERS)
+      .send({
+        drop_address: 'New Drop Place',
+        drop_lat: 22.22,
+        drop_lng: 88.88
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('pickup_lat must be between -90 and 90.');
   });
 
   it('allows customer to cancel order and returns cancellation_fee and persists reason', async () => {

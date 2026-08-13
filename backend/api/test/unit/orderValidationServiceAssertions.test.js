@@ -68,6 +68,27 @@ describe('OrderValidationService assertions', () => {
     expect(() => svc.assertEscrowState({ escrow_status: 'funded' }, ['funded'])).not.toThrow();
   });
 
+  it('assertChangeDropAllowed passes for a pending order before the trip starts', () => {
+    const svc = buildService();
+    expect(() => svc.assertChangeDropAllowed({ status: 'pending', escrow_status: null })).not.toThrow();
+    expect(() => svc.assertChangeDropAllowed({ status: 'pending', escrow_status: 'pending' })).not.toThrow();
+    expect(() => svc.assertChangeDropAllowed({ status: 'pending' })).not.toThrow();
+  });
+
+  it('assertChangeDropAllowed rejects once the trip has started', () => {
+    const svc = buildService();
+    for (const status of ['truck_assigned', 'en_route_pickup', 'arrived_pickup', 'picked_up', 'in_transit', 'arriving', 'delivered']) {
+      expect(() => svc.assertChangeDropAllowed({ status, escrow_status: null })).toThrow(DomainError);
+    }
+  });
+
+  it('assertChangeDropAllowed rejects while escrow funding is in flight', () => {
+    const svc = buildService();
+    for (const escrow_status of ['funding', 'funded']) {
+      expect(() => svc.assertChangeDropAllowed({ status: 'pending', escrow_status })).toThrow(DomainError);
+    }
+  });
+
   it('validateOrderForBidAcceptance only accepts pending orders', () => {
     const svc = buildService();
     expect(svc.validateOrderForBidAcceptance({ status: 'pending' })).toBe(true);

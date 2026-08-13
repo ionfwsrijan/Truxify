@@ -184,7 +184,10 @@ export class OrderValidationService {
 
   assertChangeDropAllowed(order) {
     const escrowInFlight = order.escrow_status === 'funding' || order.escrow_status === 'funded';
-    const escrowPending = order.escrow_status === 'pending' || order.escrow_status === null;
+    // A fresh order has no escrow record yet (NULL / unset), which is still a
+    // pending escrow state. Only reject when escrow is in flight and the order
+    // has left 'pending' (trip started / goods picked up / terminal states).
+    const escrowPending = order.escrow_status === 'pending' || order.escrow_status == null;
     if (!escrowPending || order.status !== 'pending') {
       const reason = escrowInFlight
         ? `after escrow ${order.escrow_status === 'funding' ? 'funding has been initiated' : 'has been funded'}`
