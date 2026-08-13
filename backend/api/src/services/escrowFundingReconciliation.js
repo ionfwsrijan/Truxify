@@ -119,7 +119,7 @@ async function finalizeOrRevert(order, orderRepository) {
       await orderRepository.updateOrderWithFilter(order.id, {
         escrow_funding_attempts: 0,
         escrow_funding_error: null,
-        escrow_funding_last_attempt_at: null,
+        escrow_funding_last_attempt_at: new Date().toISOString(),
       }, [{ op: 'eq', column: 'escrow_status', value: 'funding' }], 'id');
       logger.info(`[escrow-funding] Order ${order.order_display_id} funding healed and acceptance finalized.`);
       return;
@@ -183,7 +183,7 @@ async function finalizeOrRevert(order, orderRepository) {
       escrow_booking_id: null,
       pending_bid_acceptance: null,
       escrow_funding_attempts: 0,
-      escrow_funding_last_attempt_at: null,
+      escrow_funding_last_attempt_at: new Date().toISOString(),
       escrow_funding_error: mismatchReason
         ? `ESCROW_AMOUNT_MISMATCH: ${mismatchReason}`
         : null,

@@ -41,6 +41,7 @@ vi.mock('../../src/services/escrow.js', () => ({
 
 vi.mock('../../src/lib/redisLock.js', () => ({
   acquireLock: vi.fn(),
+  renewLock: vi.fn(),
   releaseLock: vi.fn(),
 }));
 
@@ -110,6 +111,63 @@ describe('escrowFundingReconciliation', () => {
         expect.any(Number)
       );
       expect(mockOrderRepository.findStaleFundingOrders).toHaveBeenCalled();
+    });
+
+    it('records escrow_funding_last_attempt_at when a funding heal succeeds', async () => {
+      mockRedisClient.set.mockResolvedValue('locked');
+
+      const mockOrders = [
+        {
+          id: 'order-1',
+          order_display_id: 'DIS-1',
+          customer_id: 'customer-1',
+          status: 'pending',
+          escrow_status: 'funding',
+          escrow_booking_id: 'booking-1',
+          escrow_amount_wei: '1000',
+          escrow_funding_attempts: 0,
+          escrow_funding_last_attempt_at: null,
+          pending_bid_acceptance: {
+            bid_id: 'bid-1',
+            load_id: 'load-1',
+            driver_id: 'driver-1',
+            truck_id: 'truck-1',
+            driver_name: 'Driver',
+            driver_rating: 4.5,
+            truck_number: 'TRK-1',
+            bid_amount: 1000,
+            order_display_id: 'DIS-1',
+            version: 1,
+          },
+        },
+      ];
+      mockOrderRepository.findStaleFundingOrders.mockResolvedValueOnce({ data: mockOrders, error: null });
+
+      const { acquireLock, renewLock, releaseLock } = await import('../../src/lib/redisLock.js');
+      acquireLock.mockResolvedValue('lock-value');
+      renewLock.mockResolvedValue(undefined);
+      releaseLock.mockResolvedValue(undefined);
+
+      const { getEscrowBooking } = await import('../../src/services/escrow.js');
+      getEscrowBooking.mockResolvedValueOnce({ amount: 1000n });
+
+      mockOrderRepository.executeRpc.mockResolvedValueOnce({ error: null });
+
+      const { sendPushNotification } = await import('../../src/services/notificationService.js');
+      sendPushNotification.mockResolvedValue(undefined);
+
+      await reconcileStaleFunding(mockOrderRepository);
+
+      expect(mockOrderRepository.updateOrderWithFilter).toHaveBeenCalledWith(
+        'order-1',
+        expect.objectContaining({
+          escrow_funding_attempts: 0,
+          escrow_funding_error: null,
+          escrow_funding_last_attempt_at: expect.any(String),
+        }),
+        [{ op: 'eq', column: 'escrow_status', value: 'funding' }],
+        'id'
+      );
     });
 
     it('returns early on DB error when fetching stale orders', async () => {
