@@ -32,6 +32,25 @@ class BackgroundSyncService {
   @visibleForTesting
   static void Function()? scheduleTaskOverride;
 
+  /// Test hook: replaces auth token resolution so tests can exercise the
+  /// background-sync auth path without Firebase/Supabase or secure storage.
+  @visibleForTesting
+  static Future<String?> Function()? resolveTokenOverride;
+
+  /// Test hook: replaces the HTTP upload so tests can assert the 401-retry
+  /// behaviour without a network round trip.
+  @visibleForTesting
+  static Future<http.StreamedResponse> Function(
+    Uri uri,
+    PodRecord pod,
+    String token,
+  )? uploadPodOverride;
+
+  /// Test hook: overrides the backend base URI so tests can drive [syncPods]
+  /// without a build-time --dart-define.
+  @visibleForTesting
+  static Uri? apiBaseUriOverride;
+
   static void initialize() {
     Workmanager().initialize(
       callbackDispatcher,
@@ -68,6 +87,78 @@ class BackgroundSyncService {
     });
   }
 
+  /// Resolves the auth token for POD sync. In the foreground isolate the live
+  /// Firebase/Supabase session is used and persisted to OS-backed secure
+  /// storage so the WorkManager isolate can pick it up. In the background
+  /// isolate Firebase/Supabase are typically not initialized, so we fall back
+  /// to the token persisted by the main isolate (issue #5739) — never
+  /// SharedPreferences.
+  static Future<String?> _resolveAuthToken() async {
+    final override = resolveTokenOverride;
+    if (override != null) return override();
+
+    String? token;
+    try {
+      final firebaseUser = FirebaseAuth.instance.currentUser;
+      if (firebaseUser != null) {
+        token = await firebaseUser.getIdToken();
+      } else {
+        token = Supabase.instance.client.auth.currentSession?.accessToken;
+      }
+    } catch (_) {
+      // Firebase/Supabase are not initialized in the background isolate.
+      token = null;
+    }
+
+    if (token == null || token.isEmpty) {
+      token = await AuthTokenStore.read();
+    }
+    if (token != null && token.isNotEmpty) {
+      // Best-effort: keep the OS-backed secure storage fresh for future
+      // background runs. A failed write must not abort the current sync.
+      try {
+        await AuthTokenStore.persist(token);
+      } catch (_) {}
+    }
+    return token;
+  }
+
+  static Future<http.StreamedResponse> _uploadPod(
+    Uri uri,
+    PodRecord pod,
+    String token,
+  ) async {
+    final override = uploadPodOverride;
+    if (override != null) return override(uri, pod, token);
+
+    final request = http.MultipartRequest('POST', uri);
+    request.headers['Authorization'] = 'Bearer $token';
+
+    if (pod.signaturePath != null) {
+      final file = File(pod.signaturePath!);
+      if (await file.exists()) {
+        request.files.add(await http.MultipartFile.fromPath(
+          'signature',
+          file.path,
+          contentType: MediaType('image', 'png'),
+        ));
+      }
+    }
+
+    if (pod.photoPath != null) {
+      final file = File(pod.photoPath!);
+      if (await file.exists()) {
+        request.files.add(await http.MultipartFile.fromPath(
+          'photo',
+          file.path,
+          contentType: MediaType('image', 'jpeg'),
+        ));
+      }
+    }
+
+    return await request.send();
+  }
+
   static Future<void> syncPods() async {
     if (_syncing) return;
     _syncing = true;
@@ -75,25 +166,11 @@ class BackgroundSyncService {
       final pendingPods = await podStorageService.getUnsyncedPods();
       if (pendingPods.isEmpty) return;
 
-      String? token;
-      try {
-        final firebaseUser = FirebaseAuth.instance.currentUser;
-        if (firebaseUser != null) {
-          token = await firebaseUser.getIdToken();
-        } else {
-          token = Supabase.instance.client.auth.currentSession?.accessToken;
-        }
-      } catch (_) {
-        // Firebase/Supabase are not initialized in the background isolate.
-        // Fall back to the auth token persisted by the main isolate in
-        // OS-backed secure storage (issue #5739) — never SharedPreferences.
-        token = await AuthTokenStore.read();
-      }
-
+      String? token = await _resolveAuthToken();
       if (token == null || token.isEmpty) return;
 
-      const envUrl = String.fromEnvironment('TRUXIFY_API_BASE_URL');
-      final apiBaseUri = Uri.tryParse(envUrl);
+      final apiBaseUri = apiBaseUriOverride ??
+          Uri.tryParse(const String.fromEnvironment('TRUXIFY_API_BASE_URL'));
       if (apiBaseUri == null ||
           !apiBaseUri.hasScheme ||
           apiBaseUri.host.isEmpty) {
@@ -111,32 +188,17 @@ class BackgroundSyncService {
             query: null,
             fragment: null,
           );
-          final request = http.MultipartRequest('POST', uri);
-          request.headers['Authorization'] = 'Bearer $token';
 
-          if (pod.signaturePath != null) {
-            final file = File(pod.signaturePath!);
-            if (await file.exists()) {
-              request.files.add(await http.MultipartFile.fromPath(
-                'signature',
-                file.path,
-                contentType: MediaType('image', 'png'),
-              ));
-            }
+          var response = await _uploadPod(uri, pod, token);
+          if (response.statusCode == 401) {
+            // The token persisted by the main isolate may have expired.
+            // Re-resolve (refreshing from the live session when available)
+            // and retry once before giving up.
+            token = await _resolveAuthToken();
+            if (token == null || token.isEmpty) break;
+            response = await _uploadPod(uri, pod, token);
           }
 
-          if (pod.photoPath != null) {
-            final file = File(pod.photoPath!);
-            if (await file.exists()) {
-              request.files.add(await http.MultipartFile.fromPath(
-                'photo',
-                file.path,
-                contentType: MediaType('image', 'jpeg'),
-              ));
-            }
-          }
-
-          final response = await request.send();
           if (response.statusCode >= 200 && response.statusCode < 300) {
             await podStorageService.markAsSynced(pod.id!);
           }
