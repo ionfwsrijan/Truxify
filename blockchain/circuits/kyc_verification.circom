@@ -1,92 +1,77 @@
 pragma circom 2.0.0;
 
-// ZK-SNARK circuit for KYC verification
+include "./poseidon.circom";
+
+// ZK-SNARK circuit for KYC verification.
+//
+// `verified` is no longer a prover-supplied input. The prover must know the
+// raw document fields and an issuer signature issued by the authority over the
+// resulting documentHash, such that:
+//   Poseidon(Poseidon(documentHash, authorityPublicKey), issuerSignature) === authorityCommitment
+// authorityPublicKey and authorityCommitment are public inputs so the verifier
+// contract can bind them to the authority's on-chain identity.
 template KYCVerification() {
     signal input documentHash;
-    signal input verified;
+    signal input authorityPublicKey;
+    signal input authorityCommitment;
+    signal input issuerSignature;
     signal input name[100];
     signal input licenseNumber[50];
     signal input rcNumber[50];
     signal input insuranceNumber[50];
     signal output isValid;
 
-    // Sum all elements of each array into compressed values
-    component nameSummer = ArraySummer(100);
+    // Commit to the exact raw document fields with the real Poseidon hash
+    // (binary fold since the vendored Poseidon is t=3), so documentHash cannot
+    // be swapped for an arbitrary value.
+    component docFold = Fold(250);
     for (var i = 0; i < 100; i++) {
-        nameSummer.in[i] <== name[i];
+        docFold.values[i] <== name[i];
     }
-
-    component licenseSummer = ArraySummer(50);
     for (var i = 0; i < 50; i++) {
-        licenseSummer.in[i] <== licenseNumber[i];
+        docFold.values[100 + i] <== licenseNumber[i];
     }
-
-    component rcSummer = ArraySummer(50);
     for (var i = 0; i < 50; i++) {
-        rcSummer.in[i] <== rcNumber[i];
+        docFold.values[150 + i] <== rcNumber[i];
     }
-
-    component insuranceSummer = ArraySummer(50);
     for (var i = 0; i < 50; i++) {
-        insuranceSummer.in[i] <== insuranceNumber[i];
+        docFold.values[200 + i] <== insuranceNumber[i];
     }
+    docFold.out === documentHash;
 
-    // Hash compressed values
-    component hasher = Poseidon(4);
-    hasher.inputs[0] <== nameSummer.out;
-    hasher.inputs[1] <== licenseSummer.out;
-    hasher.inputs[2] <== rcSummer.out;
-    hasher.inputs[3] <== insuranceSummer.out;
+    // Bind documentHash to an authority-issued commitment:
+    //   authorityCommitment === Poseidon(Poseidon(documentHash, authorityPublicKey), issuerSignature)
+    component docAndKey = Poseidon(2);
+    docAndKey.inputs[0] <== documentHash;
+    docAndKey.inputs[1] <== authorityPublicKey;
 
-    signal computedHash <== hasher.out;
+    component commitment = Poseidon(2);
+    commitment.inputs[0] <== docAndKey.out;
+    commitment.inputs[1] <== issuerSignature;
+    commitment.out === authorityCommitment;
 
-    // Compare hash using IsEqual component
-    component eq = IsEqual();
-    eq.in[0] <== computedHash;
-    eq.in[1] <== documentHash;
-    signal isMatch <== eq.out;
-
-    signal isValidInternal <== isMatch * verified;
-    isValid <== isValidInternal;
+    // isValid is derived, never a prover input: a proof exists only when every
+    // constraint above holds (document committed, authority commitment matched).
+    isValid <== 1;
 }
 
-template IsZero() {
-    signal input in;
+// Fold N signals through N-1 chained Poseidon(2) hashes.
+template Fold(N) {
+    signal input values[N];
     signal output out;
-    signal inv;
-    inv <-- in != 0 ? 1 / in : 0;
-    out <== 1 - in * inv;
-}
-
-template IsEqual() {
-    signal input in[2];
-    signal output out;
-    component iz = IsZero();
-    iz.in <== in[0] - in[1];
-    out <== iz.out;
-}
-
-template ArraySummer(n) {
-    signal input in[n];
-    signal output out;
-    signal sums[n+1];
-    sums[0] <== 0;
-    for (var i = 0; i < n; i++) {
-        sums[i+1] <== sums[i] + in[i];
+    signal acc[N-1];
+    component hashers[N-1];
+    hashers[0] = Poseidon(2);
+    hashers[0].inputs[0] <== values[0];
+    hashers[0].inputs[1] <== values[1];
+    acc[0] <== hashers[0].out;
+    for (var i = 2; i < N; i++) {
+        hashers[i-1] = Poseidon(2);
+        hashers[i-1].inputs[0] <== acc[i-2];
+        hashers[i-1].inputs[1] <== values[i];
+        acc[i-1] <== hashers[i-1].out;
     }
-    out <== sums[n];
+    out <== acc[N-2];
 }
 
-// Poseidon hash component (placeholder)
-template Poseidon(n) {
-    signal input inputs[n];
-    signal output out;
-    signal sums[n+1];
-    sums[0] <== 0;
-    for (var i = 0; i < n; i++) {
-        sums[i+1] <== sums[i] + inputs[i];
-    }
-    out <== sums[n];
-}
-
-component main = KYCVerification();
+component main {public [authorityPublicKey, authorityCommitment]} = KYCVerification();
