@@ -794,7 +794,16 @@ func (rn *RaftNode) HandleCommitOrder(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	committed := rn.CommitIndex >= entry.Index
+	// Success is only reported once the entry this request appended is actually
+	// committed to a quorum in the current term. CommitIndex covering the index
+	// is not sufficient on its own: if the node stepped down and a new leadership
+	// overwrote this index with a different entry, the numerical index would still
+	// be committed while this request's entry is not. Verify the log still holds
+	// this request's entry (matched by term) at the committed index before
+	// confirming success.
+	committed := rn.CommitIndex >= entry.Index &&
+		entry.Index <= uint64(len(rn.Log)) &&
+		rn.Log[entry.Index-1].Term == entry.Term
 	rn.mu.Unlock()
 
 	if !committed {
