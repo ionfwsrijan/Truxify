@@ -9,6 +9,7 @@ import {
   getActiveDeliveryOtp,
   verifyDeliveryOtp,
   verifyDeliveryOtpHash,
+  expireDeliveryOtps,
   sendPushNotification,
 } from "../notificationService.js";
 import {
@@ -64,6 +65,7 @@ export class DeliveryVerificationService {
       getActiveDeliveryOtp,
       verifyDeliveryOtp,
       verifyDeliveryOtpHash,
+      expireDeliveryOtps,
     };
     this.escrowReleaseFn = deps.escrowReleaseFn || defaultEscrowRelease;
     this.trackingTokenService = deps.trackingTokenService || null;
@@ -229,6 +231,9 @@ export class DeliveryVerificationService {
 
         const activeOtp =
           await this.notificationService.getActiveDeliveryOtp(orderId);
+        // Invalidate every previous unverified OTP for the order before
+        // issuing a fresh one, so only the latest OTP stays valid.
+        await this.notificationService.expireDeliveryOtps(orderId);
         const otp = crypto.randomInt(100000, 1000000).toString();
         const stored = await this.notificationService.storeDeliveryOtp(
           orderId,

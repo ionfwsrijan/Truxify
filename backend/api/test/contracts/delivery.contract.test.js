@@ -531,6 +531,40 @@ describe("POST /api/orders/:id/resend-otp — resend OTP contract", () => {
     expect(typeof res.body.expiresInMinutes).toBe("number");
   });
 
+  it("200: invalidates the previous unverified OTP on resend", async () => {
+    m.store.orders.push({
+      id: "order-rotp-3",
+      driver_id: DRIVER["x-user-id"],
+      customer_id: CUSTOMER["x-user-id"],
+      order_display_id: "ORD-ROTP-3",
+      status: "arriving",
+    });
+    const oldOtp = makeOtpRecord("otp-rotp-old", "order-rotp-3");
+    m.store.delivery_otps.push(oldOtp);
+
+    const res = await request(buildApp())
+      .post("/api/orders/order-rotp-3/resend-otp")
+      .set(DRIVER);
+
+    expectContract(res, 200);
+
+    const oldRow = m.store.delivery_otps.find((r) => r.id === "otp-rotp-old");
+    expect(oldRow).toBeDefined();
+    expect(oldRow.verified).toBe(false);
+    expect(new Date(oldRow.expires_at).getTime()).toBeLessThan(Date.now());
+
+    const newRows = m.store.delivery_otps.filter(
+      (r) =>
+        r.id !== "otp-rotp-old" &&
+        r.order_id === "order-rotp-3" &&
+        r.verified === false,
+    );
+    expect(newRows).toHaveLength(1);
+    expect(new Date(newRows[0].expires_at).getTime()).toBeGreaterThan(
+      Date.now(),
+    );
+  });
+
   it("403: forbidden when driver not assigned", async () => {
     m.store.orders.push({
       id: "order-rotp-2",
