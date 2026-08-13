@@ -16,6 +16,7 @@ import {
   getEscrowBookingId,
   buildDepositTx,
   escrowRelease,
+  escrowUpdateAmount,
   submitEscrowRefund,
   confirmEscrowRefund,
   ESCROW_MATIC_PER_PAISA,
@@ -276,6 +277,22 @@ describe('escrow service \u2014 escrowRelease (contract unconfigured)', () => {
     const { bookingId } = await escrowRelease('#FF20260528')
     const expected = getEscrowBookingId('#FF20260528')
     expect(bookingId).toBe(expected)
+  })
+})
+
+describe('escrow service \u2014 escrowUpdateAmount (contract unconfigured)', () => {
+  it('returns updated: false and a valid bookingId when contract is not initialised', async () => {
+    const result = await escrowUpdateAmount('#FF20260611', '1000000000000000000')
+    expect(result.updated).toBe(false)
+    expect(result.reason).toBe('escrow_disabled')
+    expect(typeof result.bookingId).toBe('string')
+    expect(result.bookingId.startsWith('0x')).toBe(true)
+  })
+
+  it('returns the same bookingId as getEscrowBookingId', async () => {
+    const result = await escrowUpdateAmount('#FF20260612', '1000000000000000000')
+    const expected = getEscrowBookingId('#FF20260612')
+    expect(result.bookingId).toBe(expected)
   })
 })
 

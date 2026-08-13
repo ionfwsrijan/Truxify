@@ -186,7 +186,7 @@ import {
   recordDepositTx,
   confirmEscrowRefund,
 } from '../core/container.js';
-import { getEscrowBookingId, resolveExpectedDepositAmount, paisaToMaticWei, submitEscrowRefund } from '../services/escrow.js';
+import { getEscrowBookingId, resolveExpectedDepositAmount, paisaToMaticWei, submitEscrowRefund, escrowUpdateAmount } from '../services/escrow.js';
 
 import { getRouteEstimate, getRouteGeometry, buildStraightLineGeometry } from '../services/osrm.js';
 import { computeOrderPricing } from '../lib/pricing.js';
@@ -495,6 +495,22 @@ router.put('/:id/change-drop', authenticate, userLimiter, changeDropLimiter, req
     // at deposit time and on release), so it must track total_amount using the
     // same canonical paisa→wei conversion the rest of the escrow pipeline uses.
     const newAmountWei = paisaToMaticWei(pricing.totalAmount);
+
+    // Keep the on-chain booking amount in sync with the re-priced total before
+    // persisting anything: change-drop may only run while escrow is unfunded,
+    // but if an on-chain booking already exists (e.g. a stale booking left over
+    // from a prior funding attempt) its amount must match the new escrow figure
+    // or the change is rejected — otherwise release-time verification would
+    // refuse to pay the driver (issue #11240).
+    const escrowSync = await escrowUpdateAmount(order.order_display_id, newAmountWei);
+    if (escrowSync.error) {
+      logger.error('Escrow booking amount sync failed for change-drop:', escrowSync.error);
+      return res.status(409).json({
+        error: 'Drop location cannot be changed because the escrow booking amount cannot be kept in sync.',
+        details: escrowSync.error,
+        code: escrowSync.code,
+      });
+    }
 
     const updates = {
       drop_address,

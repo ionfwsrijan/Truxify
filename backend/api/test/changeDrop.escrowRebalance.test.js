@@ -188,4 +188,17 @@ describe('RPC/route persist escrow_amount_wei (issue #5825)', () => {
     expect(changeDropSection).toContain('paisaToMaticWei(pricing.totalAmount)');
     expect(changeDropSection).toContain('BigInt(paisaToMaticWei(pricing.totalAmount))');
   });
+
+  it('the change-drop route handler keeps the on-chain booking amount in sync and rejects when it cannot', () => {
+    const src = fs.readFileSync(ROUTE_PATH, 'utf8');
+    const changeDropSection = src.slice(
+      src.indexOf("router.put('/:id/change-drop'"),
+      src.indexOf('// ============================================================================\n// 16.'),
+    );
+    // The new escrow figure is pushed through the escrow service so an existing
+    // on-chain booking is reconciled with the re-priced total (issue #11240).
+    expect(changeDropSection).toContain('escrowUpdateAmount(order.order_display_id, newAmountWei)');
+    expect(changeDropSection).toContain('escrowSync.error');
+    expect(changeDropSection).toContain('escrow_amount_wei: newAmountWei.toString()');
+  });
 });

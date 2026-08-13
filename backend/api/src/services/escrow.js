@@ -930,6 +930,77 @@ export async function submitEscrowResolveDisputeTimeout (orderDisplayId) {
 }
 export const lockPayment = escrowLockPayment;
 
+/**
+ * Reconcile the on-chain booking amount with a re-priced escrow figure.
+ *
+ * change-drop reprices an order and persists the new `escrow_amount_wei`
+ * off-chain (issue #5825). This function keeps the on-chain booking in step so
+ * release-time verification cannot later refuse to pay the driver with an
+ * amount mismatch (issue #11240).
+ *
+ * Because change-drop is only allowed while the escrow is unfunded, the normal
+ * case has no on-chain booking yet — the newly persisted escrow_amount_wei is
+ * simply the amount the eventual deposit is verified against. When a booking
+ * already exists (e.g. a stale booking left over from a prior funding attempt)
+ * its amount must match the new figure. The deployed contract has no
+ * updateBookingAmount entry point, so an existing booking with a different
+ * amount cannot be re-anchored — the caller must reject the change (fail
+ * closed) rather than let on-chain and off-chain amounts diverge.
+ *
+ * @param {string} orderDisplayId
+ * @param {string|bigint} newAmountWei — re-priced escrow amount in wei
+ * @returns {Promise<{updated: boolean, bookingId: string, reason?: string, error?: string, code?: string}>}
+ */
+export async function escrowUpdateAmount (orderDisplayId, newAmountWei) {
+  return measureExecution('EscrowService.escrowUpdateAmount', async () => {
+    const bookingId = getEscrowBookingId(orderDisplayId)
+
+    if (!escrowContract) {
+      logger.warn('[escrow] Contract not initialised — skipping booking amount update.')
+      return { updated: false, bookingId, reason: 'escrow_disabled' }
+    }
+
+    if (await isEscrowPaused()) {
+      logger.warn(`[escrow] Circuit breaker paused — refusing to update booking amount for ${orderDisplayId}.`)
+      return escrowPausedResult(bookingId, { updated: false })
+    }
+
+    let booking
+    try {
+      booking = await escrowContract.bookings(bookingId)
+    } catch (err) {
+      logger.error(`[escrow] Failed to query booking for amount update on ${orderDisplayId}: ${err.message}`)
+      return { updated: false, bookingId, error: err.message, code: 'ESCROW_STATUS_UNAVAILABLE' }
+    }
+
+    // No funded booking yet — the pending deposit amount was already persisted
+    // off-chain and will be anchored when the escrow is funded.
+    if (!booking || booking.amount <= 0n) {
+      return { updated: true, bookingId, reason: 'no_active_booking' }
+    }
+
+    if (booking.paid === true) {
+      return {
+        updated: false,
+        bookingId,
+        error: `Booking ${orderDisplayId} has already been paid on-chain — the escrow amount cannot be changed.`,
+        code: 'ESCROW_ALREADY_PAID',
+      }
+    }
+
+    if (booking.amount === BigInt(newAmountWei)) {
+      return { updated: true, bookingId, reason: 'amount_unchanged' }
+    }
+
+    return {
+      updated: false,
+      bookingId,
+      error: `On-chain booking amount (${booking.amount} wei) does not match the new escrow amount (${BigInt(newAmountWei)} wei) and cannot be updated in place. Refusing the drop change.`,
+      code: 'ESCROW_AMOUNT_MISMATCH',
+    }
+  })
+}
+
 
 
 export async function verifyOnChainEscrowBalance(bookingId, expectedWei) {
