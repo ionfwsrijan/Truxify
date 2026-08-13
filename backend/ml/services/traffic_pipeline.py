@@ -1,6 +1,7 @@
 import requests
 import json
 import asyncio
+import time
 import aiohttp
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -27,6 +28,22 @@ from collections import deque, defaultdict
 
 logger = logging.getLogger(__name__)
 Base = declarative_base()
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float env var, falling back to ``default`` when unset/invalid."""
+    try:
+        return float(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an int env var, falling back to ``default`` when unset/invalid."""
+    try:
+        return int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
 
 
 def eta_seconds_from_speed(route_distance_m: float, predicted_speed_mps: float) -> Optional[float]:
@@ -68,6 +85,19 @@ class TrafficPipeline:
         self.model = self._load_or_create_model()
         self.gmaps_api_key = os.getenv('GOOGLE_MAPS_API_KEY', '')
         self.osrm_url = os.getenv('OSRM_URL', 'http://localhost:5000')
+        # Per-call timeout so a hung OSRM/Google Maps cannot hang the ETA
+        # pipeline; configured via env (issue #11228).
+        self.traffic_timeout = aiohttp.ClientTimeout(
+            total=_env_float('OSRM_TIMEOUT_SECONDS', 5.0),
+            connect=_env_float('OSRM_CONNECT_TIMEOUT_SECONDS', 2.0),
+        )
+        # Circuit breaker around OSRM calls: fail fast once N consecutive
+        # failures are observed, then allow traffic again after a cool-down
+        # (issue #11228).
+        self._osrm_circuit_threshold = _env_int('OSRM_CIRCUIT_THRESHOLD', 5)
+        self._osrm_circuit_cooldown_seconds = _env_float('OSRM_CIRCUIT_COOLDOWN_SECONDS', 30.0)
+        self._osrm_failures = 0
+        self._osrm_circuit_open_until = 0.0
         self._closed = False
         # Rolling per-route history of recent feature rows, fed to predict_eta
         # as a genuine 60-step sequence instead of a tiled constant row
@@ -202,7 +232,7 @@ class TrafficPipeline:
             'key': self.gmaps_api_key
         }
         
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=self.traffic_timeout) as session:
             async with session.get(url, params=params) as response:
                 data = await response.json()
                 if data.get('routes'):
@@ -217,21 +247,53 @@ class TrafficPipeline:
                     }
         return {}
     
+    def _osrm_circuit_allows(self) -> bool:
+        """Return True when the OSRM circuit breaker permits a call."""
+        if self._osrm_circuit_open_until and time.monotonic() < self._osrm_circuit_open_until:
+            return False
+        return True
+
+    def _osrm_record_success(self) -> None:
+        self._osrm_failures = 0
+        self._osrm_circuit_open_until = 0.0
+
+    def _osrm_record_failure(self) -> None:
+        self._osrm_failures += 1
+        if self._osrm_failures >= self._osrm_circuit_threshold:
+            self._osrm_circuit_open_until = time.monotonic() + self._osrm_circuit_cooldown_seconds
+            logger.warning(
+                f"OSRM circuit breaker opened for {self._osrm_circuit_cooldown_seconds}s "
+                f"after {self._osrm_failures} consecutive failures"
+            )
+
     async def _fetch_osrm_data(self, source: Dict, dest: Dict):
         """Fetch routing data from OSRM"""
+        if not self._osrm_circuit_allows():
+            logger.warning("OSRM circuit breaker open; returning fallback estimate")
+            return {'speed': 50, 'free_flow_speed': 80}
+
         url = f"{self.osrm_url}/route/v1/driving/{source['lng']},{source['lat']};{dest['lng']},{dest['lat']}"
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                data = await response.json()
-                if data.get('routes'):
-                    route = data['routes'][0]
-                    return {
-                        'duration': route['duration'],
-                        'distance': route['distance'],
-                        'speed': route['distance'] / route['duration'] if route['duration'] > 0 else 50,
-                        'free_flow_speed': route['distance'] / (route['duration'] * 0.8) if route['duration'] > 0 else 80
-                    }
+
+        try:
+            async with aiohttp.ClientSession(timeout=self.traffic_timeout) as session:
+                async with session.get(url) as response:
+                    if response.status >= 500:
+                        self._osrm_record_failure()
+                        logger.error(f"OSRM request failed with status {response.status}")
+                        return {'speed': 50, 'free_flow_speed': 80}
+                    data = await response.json()
+                    if data.get('routes'):
+                        route = data['routes'][0]
+                        self._osrm_record_success()
+                        return {
+                            'duration': route['duration'],
+                            'distance': route['distance'],
+                            'speed': route['distance'] / route['duration'] if route['duration'] > 0 else 50,
+                            'free_flow_speed': route['distance'] / (route['duration'] * 0.8) if route['duration'] > 0 else 80
+                        }
+        except Exception as e:
+            self._osrm_record_failure()
+            logger.error(f"OSRM request failed: {e}")
         return {'speed': 50, 'free_flow_speed': 80}
     
     async def get_real_time_traffic(self, route_id: str):

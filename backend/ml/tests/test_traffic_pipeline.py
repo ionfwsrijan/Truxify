@@ -1,6 +1,9 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 import os
+import asyncio
+import time
+import aiohttp
 
 from services.traffic_pipeline import TrafficPipeline
 
@@ -65,3 +68,120 @@ class TestEtaComputation:
         predicted_speed_kmh = 60.0
         eta_seconds = route_distance_m / (predicted_speed_kmh / 3.6)
         assert 5900 < eta_seconds < 6100, f"Expected ~6000s, got {eta_seconds}"
+
+
+class TestOsrmTimeoutAndCircuitBreaker:
+    """Tests for the OSRM call timeout + circuit breaker in
+    TrafficPipeline._fetch_osrm_data (issue #11228).
+
+    The pipeline instance is created via object.__new__ to skip the DB/Redis
+    engine and LSTM model setup (pattern from test_ab_testing_model.py).
+    """
+
+    def _make_pipeline(self, threshold=5, cooldown=30.0):
+        pipeline = object.__new__(TrafficPipeline)
+        pipeline.osrm_url = "http://osrm:5000"
+        pipeline.traffic_timeout = aiohttp.ClientTimeout(total=5.0, connect=2.0)
+        pipeline._osrm_circuit_threshold = threshold
+        pipeline._osrm_circuit_cooldown_seconds = cooldown
+        pipeline._osrm_failures = 0
+        pipeline._osrm_circuit_open_until = 0.0
+        return pipeline
+
+    @staticmethod
+    def _mock_osrm_session(mock_response):
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+        session = MagicMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.get.return_value = mock_response
+        return session
+
+    def test_fetch_osrm_data_applies_client_timeout(self):
+        pipeline = self._make_pipeline()
+        response = MagicMock()
+        response.status = 200
+        response.json = AsyncMock(return_value={'routes': [{'duration': 120.0, 'distance': 2000.0}]})
+
+        with patch(
+            "services.traffic_pipeline.aiohttp.ClientSession",
+            return_value=self._mock_osrm_session(response),
+        ) as mock_cls:
+            result = asyncio.run(pipeline._fetch_osrm_data(
+                {'lat': 1.0, 'lng': 2.0}, {'lat': 3.0, 'lng': 4.0}
+            ))
+
+        mock_cls.assert_called_once()
+        timeout = mock_cls.call_args.kwargs.get('timeout')
+        assert timeout is not None
+        assert timeout.total == 5.0
+        assert timeout.connect == 2.0
+        assert result['distance'] == 2000.0
+
+    def test_circuit_opens_after_threshold_failures(self):
+        pipeline = self._make_pipeline(threshold=2, cooldown=30.0)
+        assert pipeline._osrm_circuit_allows() is True
+        pipeline._osrm_record_failure()
+        assert pipeline._osrm_circuit_allows() is True
+        pipeline._osrm_record_failure()
+        assert pipeline._osrm_circuit_allows() is False
+
+    def test_circuit_restores_after_cooldown_and_success(self):
+        pipeline = self._make_pipeline(threshold=1, cooldown=30.0)
+        pipeline._osrm_record_failure()
+        assert pipeline._osrm_circuit_allows() is False
+        pipeline._osrm_circuit_open_until = time.monotonic() - 1
+        assert pipeline._osrm_circuit_allows() is True
+        pipeline._osrm_record_success()
+        assert pipeline._osrm_failures == 0
+        assert pipeline._osrm_circuit_allows() is True
+
+    def test_fetch_osrm_data_fails_fast_when_circuit_open(self):
+        pipeline = self._make_pipeline()
+        pipeline._osrm_failures = 5
+        pipeline._osrm_circuit_open_until = time.monotonic() + 30
+
+        with patch("services.traffic_pipeline.aiohttp.ClientSession") as mock_cls:
+            result = asyncio.run(pipeline._fetch_osrm_data(
+                {'lat': 1.0, 'lng': 2.0}, {'lat': 3.0, 'lng': 4.0}
+            ))
+
+        mock_cls.assert_not_called()
+        assert result == {'speed': 50, 'free_flow_speed': 80}
+
+    def test_fetch_osrm_data_records_failure_on_server_error(self):
+        pipeline = self._make_pipeline(threshold=1, cooldown=30.0)
+        response = MagicMock()
+        response.status = 500
+
+        with patch(
+            "services.traffic_pipeline.aiohttp.ClientSession",
+            return_value=self._mock_osrm_session(response),
+        ):
+            result = asyncio.run(pipeline._fetch_osrm_data(
+                {'lat': 1.0, 'lng': 2.0}, {'lat': 3.0, 'lng': 4.0}
+            ))
+
+        assert result == {'speed': 50, 'free_flow_speed': 80}
+        assert pipeline._osrm_circuit_allows() is False
+
+    def test_fetch_osrm_data_records_failure_on_timeout(self):
+        pipeline = self._make_pipeline(threshold=1, cooldown=30.0)
+
+        def _raise_timeout(*args, **kwargs):
+            raise asyncio.TimeoutError("Timed out")
+
+        response = MagicMock()
+        response.status = 200
+
+        session = self._mock_osrm_session(response)
+        session.get.side_effect = _raise_timeout
+
+        with patch("services.traffic_pipeline.aiohttp.ClientSession", return_value=session):
+            result = asyncio.run(pipeline._fetch_osrm_data(
+                {'lat': 1.0, 'lng': 2.0}, {'lat': 3.0, 'lng': 4.0}
+            ))
+
+        assert result == {'speed': 50, 'free_flow_speed': 80}
+        assert pipeline._osrm_circuit_allows() is False
