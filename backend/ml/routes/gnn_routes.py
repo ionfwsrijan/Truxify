@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 import logging
 
-from gnn.models import GraphNetworkBuilder, RouteOptimizer
+from gnn.models import GraphNetworkBuilder, RouteOptimizer, UntrainedModelError
 import os
 
 logger = logging.getLogger(__name__)
@@ -101,6 +101,9 @@ async def optimize_route(request: RouteRequest):
                 'error': 'Route optimization failed',
                 'timestamp': datetime.now().isoformat()
             }
+    except UntrainedModelError as e:
+        logger.error(f"Route optimization refused: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Route optimization failed: {e}")
         logger.error(f"Internal error: {e}")
@@ -130,6 +133,9 @@ async def multi_objective_optimize(request: RouteRequest):
             'data': result,
             'timestamp': datetime.now().isoformat()
         }
+    except UntrainedModelError as e:
+        logger.error(f"Multi-objective optimization refused: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Multi-objective optimization failed: {e}")
         logger.error(f"Internal error: {e}")
@@ -139,11 +145,17 @@ async def multi_objective_optimize(request: RouteRequest):
 @router.post("/train")
 async def train_model(request: TrainRequest):
     """Train GNN model"""
+    # In production: load training data
+    train_data = []
+    val_data = []
+
+    if not train_data:
+        raise HTTPException(
+            status_code=422,
+            detail="No training data available; refusing to train GNN on an empty dataset"
+        )
+
     try:
-        # In production: load training data
-        train_data = []
-        val_data = []
-        
         loss = optimizer.train(train_data, val_data, request.epochs)
         
         return {

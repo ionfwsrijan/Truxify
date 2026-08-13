@@ -10,6 +10,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+class UntrainedModelError(RuntimeError):
+    """Raised when live routing is attempted before the GNN model is trained or loaded."""
+
 class GNNRouteModel(nn.Module):
     """Graph Neural Network for Route Optimization"""
     
@@ -166,6 +169,7 @@ class RouteOptimizer:
     def __init__(self, model_path=None):
         self.model = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.trained = False
         
         if model_path:
             self.load_model(model_path)
@@ -176,6 +180,10 @@ class RouteOptimizer:
     
     def optimize_route(self, start_node, end_node, graph_data, objectives=['time', 'cost', 'fuel']):
         """Optimize route using GNN"""
+        if not self.trained:
+            raise UntrainedModelError(
+                "GNN model has not been trained; refusing live routing with untrained model"
+            )
         try:
             # Convert to PyTorch Geometric
             data = graph_data.to(self.device)
@@ -285,6 +293,11 @@ class RouteOptimizer:
     
     def train(self, train_data, val_data=None, epochs=100):
         """Train GNN model"""
+        if not train_data:
+            raise ValueError(
+                "Cannot train GNN model on an empty training dataset"
+            )
+
         optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
         criterion = nn.MSELoss()
         
@@ -311,6 +324,7 @@ class RouteOptimizer:
             if epoch % 10 == 0:
                 logger.info(f"Epoch {epoch}: Loss = {avg_loss:.4f}")
         
+        self.trained = True
         return avg_loss
     
     def save_model(self, path='models/gnn_route.pth'):
@@ -323,6 +337,7 @@ class RouteOptimizer:
         self.model = GNNRouteModel().to(self.device)
         self.model.load_state_dict(torch.load(path, map_location=self.device))
         self.model.eval()
+        self.trained = True
         logger.info(f"✅ Model loaded from {path}")
     
     def multi_objective_optimization(self, start, end, graph_data):
