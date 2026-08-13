@@ -530,7 +530,7 @@ class EventStore {
                 this.logger.warn(`Kafka unavailable — skipping publish of ${event.type}`);
                 return;
             }
-            await kafkaModule.default.publishEvent(topic, enriched, event.aggregateId);
+            await kafkaModule.default.publishEvent(topic, enriched, event.id);
             this.logger.info(`📤 Event published to Kafka: ${event.type}`);
         }
     }

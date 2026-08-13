@@ -107,11 +107,11 @@ describe('legacy event-store Kafka key (Issue #11283)', () => {
     expect(new Set(claimKeys).size).toBe(2);
   });
 
-  it('old behavior (aggregateId fallback) would collide the two events', async () => {
-    // Without an explicit event-id key, publishEvent falls back to the
-    // aggregate/order id — the pre-fix bug that caused dedup collisions.
-    await kafkaConfig.publishEvent('order.updated', legacyEnvelope(EVENT_1, 'CONFIRMED'));
-    await kafkaConfig.publishEvent('order.updated', legacyEnvelope(EVENT_2, 'CANCELLED'));
+  it('old behavior (order id as key) would collide the two events', async () => {
+    // Pre-fix, event-store.js passed the aggregate/order id as the Kafka key,
+    // so every event of one order on the same topic shared a claim key.
+    await kafkaConfig.publishEvent('order.updated', legacyEnvelope(EVENT_1, 'CONFIRMED'), ORDER_ID);
+    await kafkaConfig.publishEvent('order.updated', legacyEnvelope(EVENT_2, 'CANCELLED'), ORDER_ID);
 
     expect(sentMessages).toHaveLength(2);
     expect(sentMessages[0].key).toBe(ORDER_ID);
