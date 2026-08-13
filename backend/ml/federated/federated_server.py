@@ -4,6 +4,7 @@ from tensorflow import keras
 import redis
 import json
 import logging
+import threading
 from typing import List, Dict, Any
 from datetime import datetime
 import hashlib
@@ -20,6 +21,7 @@ class FederatedServer:
         self.model = self._create_model()
         self.global_weights = None
         self.client_weights = {}
+        self.round_clients = []
         self.round = 0
         self.min_clients = 3
         self.clients_per_round = 5
@@ -32,6 +34,13 @@ class FederatedServer:
         self.dp_clip_norm = 1.0
         
         logger.info("✅ Federated Server initialized")
+        
+        # Start background consumer that feeds client updates into aggregation
+        try:
+            self._update_consumer = self.start_update_consumer()
+        except Exception as e:
+            logger.warning(f"Failed to start federated update consumer: {e}")
+            self._update_consumer = None
     
     def _create_model(self):
         """Create driver behavior model"""
@@ -53,6 +62,8 @@ class FederatedServer:
     def start_round(self):
         """Start new federated learning round"""
         self.round += 1
+        self.client_weights.clear()
+        self.round_clients = []
         
         # Get available clients
         clients = self._get_available_clients()
@@ -62,6 +73,7 @@ class FederatedServer:
         
         # Select clients for this round
         selected_clients = clients[:self.clients_per_round]
+        self.round_clients = selected_clients
         
         # Broadcast global model weights
         if self.global_weights is None:
@@ -123,8 +135,9 @@ class FederatedServer:
             
             logger.info(f"📥 Received update from client {client_id}")
             
-            # Check if all clients have responded
-            if len(self.client_weights) >= self.clients_per_round:
+            # Check if all expected clients have responded
+            expected = len(self.round_clients) if self.round_clients else self.clients_per_round
+            if len(self.client_weights) >= expected:
                 self._aggregate_weights()
             
             return {'success': True}
@@ -177,6 +190,7 @@ class FederatedServer:
         
         # Clear client weights for next round
         self.client_weights.clear()
+        self.round_clients = []
         
         # Broadcast updated model to all clients
         self._broadcast_updated_model()
@@ -228,6 +242,40 @@ class FederatedServer:
                 'timestamp': datetime.now().isoformat()
             })
         )
+    
+    def start_update_consumer(self):
+        """Start background consumer that feeds client updates into aggregation"""
+        thread = threading.Thread(
+            target=self._consume_updates,
+            daemon=True,
+            name="federated-update-consumer"
+        )
+        thread.start()
+        return thread
+    
+    def _consume_updates(self):
+        """Subscribe to client update notifications and process payloads"""
+        try:
+            pubsub = self.redis.pubsub()
+            pubsub.subscribe('federated:updates')
+            for message in pubsub.listen():
+                if message.get('type') != 'message':
+                    continue
+                try:
+                    payload = json.loads(message['data'])
+                except (TypeError, ValueError):
+                    continue
+                if payload.get('type') != 'client_update':
+                    continue
+                client_id = payload.get('client_id')
+                if not client_id:
+                    continue
+                encrypted = self.redis.get(f'federated:update:{client_id}')
+                if encrypted:
+                    self.receive_client_update(client_id, encrypted)
+                    self.redis.delete(f'federated:update:{client_id}')
+        except Exception as e:
+            logger.error(f"Federated update consumer stopped: {e}")
     
     def get_global_model(self):
         """Get global model weights"""
