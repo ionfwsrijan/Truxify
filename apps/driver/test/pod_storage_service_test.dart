@@ -24,6 +24,7 @@ void main() {
         photoPath: '/path/to/photo.jpg',
         synced: 1,
         createdAt: 1234567890,
+        updatedAt: 1234567899,
       );
 
       expect(record.id, 1);
@@ -32,6 +33,7 @@ void main() {
       expect(record.photoPath, '/path/to/photo.jpg');
       expect(record.synced, 1);
       expect(record.createdAt, 1234567890);
+      expect(record.updatedAt, 1234567899);
     });
 
     test('toMap produces correct map', () {
@@ -42,6 +44,7 @@ void main() {
         photoPath: '/path/to/photo.jpg',
         synced: 0,
         createdAt: 1234567890,
+        updatedAt: 1234567899,
       );
 
       final map = record.toMap();
@@ -51,6 +54,7 @@ void main() {
       expect(map['photo_path'], '/path/to/photo.jpg');
       expect(map['synced'], 0);
       expect(map['created_at'], 1234567890);
+      expect(map['updated_at'], 1234567899);
     });
 
     test('fromMap creates PodRecord correctly', () {
@@ -61,6 +65,7 @@ void main() {
         'photo_path': '/photo/path',
         'synced': 1,
         'created_at': 9876543210,
+        'updated_at': 9876543299,
       };
 
       final record = PodRecord.fromMap(map);
@@ -70,6 +75,7 @@ void main() {
       expect(record.photoPath, '/photo/path');
       expect(record.synced, 1);
       expect(record.createdAt, 9876543210);
+      expect(record.updatedAt, 9876543299);
     });
 
     test('fromMap handles null optional fields', () {
@@ -80,11 +86,13 @@ void main() {
         'photo_path': null,
         'synced': 0,
         'created_at': 1111111111,
+        'updated_at': null,
       };
 
       final record = PodRecord.fromMap(map);
       expect(record.signaturePath, isNull);
       expect(record.photoPath, isNull);
+      expect(record.updatedAt, isNull);
     });
   });
 }
