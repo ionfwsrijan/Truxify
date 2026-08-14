@@ -333,6 +333,26 @@ class DigilockerService {
       };
     }
 
+    // Persist the verification flag on the real path (not just the mock) so
+    // WIM bypass can rely on profiles.is_digilocker_verified in production.
+    if (!isMock && syncResults.length > 0) {
+      const { error: profileUpdateError } = await supabase
+        .from('profiles')
+        .update({ is_digilocker_verified: true })
+        .eq('id', driverId);
+
+      if (profileUpdateError) {
+        logger.error({ err: profileUpdateError, driverId }, 'Failed to mark profile DigiLocker verified');
+        return {
+          success: false,
+          error: `profile:${profileUpdateError.message}`,
+          syncedDocumentsCount: syncResults.length,
+          documents: syncResults,
+          isMock
+        };
+      }
+    }
+
     return {
       success: true,
       syncedDocumentsCount: syncResults.length,
