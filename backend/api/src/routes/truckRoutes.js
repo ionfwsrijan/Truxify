@@ -80,7 +80,7 @@
  */
 
 import express from 'express';
-import { supabase, supabaseAdmin, mongoDb, redisClient } from '../config/db.js';
+import { supabase, supabaseAdmin, mongoDb, redisClient, createUserClient } from '../config/db.js';
 import { authenticate } from '../middleware/auth.js';
 import { requirePolicy } from '../middleware/requirePolicy.js';
 import { userLimiter } from '../middleware/rateLimiter.js';
@@ -199,8 +199,10 @@ router.post('/', authenticate, requirePolicy('truck:register'), userLimiter, val
   const normalizedNumberPlate = sanitizeNumberPlate(number_plate);
 
   try {
+    const userClient = createUserClient(req.token);
+
     // Check for duplicate number plate
-    const { data: existing, error: checkErr } = await supabase
+    const { data: existing, error: checkErr } = await userClient
       .from('trucks')
       .select('id')
       .eq('number_plate', normalizedNumberPlate)
@@ -214,7 +216,7 @@ router.post('/', authenticate, requirePolicy('truck:register'), userLimiter, val
       return res.status(409).json({ error: 'A truck with this number plate is already registered.' });
     }
 
-    const { data: truck, error: insertErr } = await supabase
+    const { data: truck, error: insertErr } = await userClient
       .from('trucks')
       .insert({ name, truck_type, number_plate: normalizedNumberPlate, max_capacity_tons, driver_id: req.user.id })
       .select('id, name, truck_type, number_plate, max_capacity_tons, created_at')
