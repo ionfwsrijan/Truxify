@@ -332,7 +332,8 @@ function hasValidCoordinates(lat, lng) {
  */
 router.get('/stats', authenticate, userLimiter, requirePolicy('driver:view-stats'), async (req, res) => {
   try {
-    const { data: details, error } = await supabase
+    const userClient = createUserClient(req.token);
+    const { data: details, error } = await userClient
       .from('driver_details')
       .select('rating, total_trips, completion_rate, is_online, wallet_confirmed, wallet_pending, wallet_total, truck_id')
       .eq('user_id', req.user.id)
@@ -349,7 +350,7 @@ router.get('/stats', authenticate, userLimiter, requirePolicy('driver:view-stats
     // Fetch truck details if assigned
     let truck = null;
     if (details.truck_id) {
-      const { data: truckData } = await supabase
+      const { data: truckData } = await userClient
         .from('trucks')
         .select('*')
         .eq('id', details.truck_id)
@@ -400,7 +401,8 @@ router.put('/online', authenticate, userLimiter, requirePolicy('driver:toggle-on
   const { is_online } = req.body;
 
   try {
-    const { data: details, error } = await supabase
+    const userClient = createUserClient(req.token);
+    const { data: details, error } = await userClient
       .from('driver_details')
       .update({ is_online, updated_at: new Date().toISOString() })
       .eq('user_id', req.user.id)
@@ -432,7 +434,8 @@ router.put('/hos/status', authenticate, userLimiter, requirePolicy('driver:updat
   const { status } = req.body;
 
   try {
-    const { data: details, error } = await supabase
+    const userClient = createUserClient(req.token);
+    const { data: details, error } = await userClient
       .from('driver_details')
       .update({
         hos_status: status,
@@ -519,11 +522,12 @@ router.get('/wallet/history', authenticate, userLimiter, requirePolicy('driver:v
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
+    const userClient = createUserClient(req.token);
     const {
       data: transactions,
       error,
       count
-    } = await supabase
+    } = await userClient
       .from('wallet_transactions')
       .select('*', { count: 'exact' })
       .eq('driver_id', req.user.id)
@@ -1908,7 +1912,8 @@ router.patch('/availability', authenticate, userLimiter, async (req, res) => {
       return res.status(400).json({ error: 'available field must be a boolean.' });
     }
 
-    const { data: details, error } = await supabase
+    const userClient = createUserClient(req.token);
+    const { data: details, error } = await userClient
       .from('driver_details')
       .update({ is_online: available, updated_at: new Date().toISOString() })
       .eq('user_id', req.user.id)
@@ -1943,8 +1948,10 @@ router.put('/truck', authenticate, userLimiter, requireDriverRole, async (req, r
       return res.status(400).json({ error: 'type must be one of: Open Body, Closed Body, Container, Refrigerated.' });
     }
 
+    const userClient = createUserClient(req.token);
+
     // Check if driver has an existing truck assigned
-    const { data: details, error: detailsErr } = await supabase
+    const { data: details, error: detailsErr } = await userClient
       .from('driver_details')
       .select('truck_id')
       .eq('user_id', req.user.id)
@@ -1959,7 +1966,7 @@ router.put('/truck', authenticate, userLimiter, requireDriverRole, async (req, r
 
     if (truckId) {
       // Update existing truck
-      const { data, error } = await supabase
+      const { data, error } = await userClient
         .from('trucks')
         .update({
           truck_type: type,
@@ -1975,7 +1982,7 @@ router.put('/truck', authenticate, userLimiter, requireDriverRole, async (req, r
       truckData = data;
     } else {
       // Create new truck
-      const { data, error } = await supabase
+      const { data, error } = await userClient
         .from('trucks')
         .insert({
           driver_id: req.user.id,
@@ -1992,7 +1999,7 @@ router.put('/truck', authenticate, userLimiter, requireDriverRole, async (req, r
       truckId = data.id;
 
       // Update driver details with new truck ID
-      await supabase
+      await userClient
         .from('driver_details')
         .update({ truck_id: truckId, updated_at: new Date().toISOString() })
         .eq('user_id', req.user.id);
