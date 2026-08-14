@@ -104,7 +104,7 @@ import {
   getCustomerStats,
   getDriverDetails
 } from '../services/profileService.js';
-import { supabase } from '../config/db.js';
+import { supabase, createUserClient } from '../config/db.js';
 import { ProfileModel } from '../models/ProfileModel.js';
 import { invalidateCachedProfile, invalidateCachedSupabaseProfile, invalidateCachedSupabaseProfileAll } from '../lib/profileCache.js';
 import { auditLog } from '../middleware/auditLog.js';
@@ -286,7 +286,8 @@ router.put('/wallet', authenticate, userLimiter, validateBody(updateWalletSchema
   }
 
   try {
-    const { data: existing, error: checkErr } = await supabase
+    const userClient = createUserClient(req.token);
+    const { data: existing, error: checkErr } = await userClient
       .from('profiles')
       .select('polygon_wallet_address')
       .eq('id', userId)
@@ -295,7 +296,7 @@ router.put('/wallet', authenticate, userLimiter, validateBody(updateWalletSchema
     if (checkErr) return res.status(500).json({ error: 'Failed to fetch profile.', details: checkErr.message });
     if (!existing) return res.status(404).json({ error: 'Profile not found.' });
 
-    const { error: updateErr } = await supabase
+    const { error: updateErr } = await userClient
       .from('profiles')
       .update({
         polygon_wallet_address: normalized,
@@ -310,7 +311,7 @@ router.put('/wallet', authenticate, userLimiter, validateBody(updateWalletSchema
     }
 
     if (req.user.role === 'driver') {
-      const { error: driverDetailsErr } = await supabase
+      const { error: driverDetailsErr } = await userClient
         .from('driver_details')
         .upsert({ user_id: userId, polygon_wallet_address: normalized }, { onConflict: 'user_id' });
 
@@ -363,6 +364,7 @@ router.put('/wallet', authenticate, userLimiter, validateBody(updateWalletSchema
  */
 router.put('/', authenticate, userLimiter, validateBody(updateProfileSchema), async (req, res) => {
   try {
+    const userClient = createUserClient(req.token);
     const userId = req.user.id;
     const { full_name, language, dark_mode, is_online, phone, email, number_plate } = req.body;
     const role = req.user.role;
@@ -374,7 +376,7 @@ router.put('/', authenticate, userLimiter, validateBody(updateProfileSchema), as
     if (phone !== undefined) profileUpdate.phone = phone;
     if (email !== undefined) profileUpdate.email = email;
 
-    const { data, error } = await supabase
+    const { data, error } = await userClient
       .from('profiles')
       .update(profileUpdate)
       .eq('id', userId)
@@ -384,7 +386,7 @@ router.put('/', authenticate, userLimiter, validateBody(updateProfileSchema), as
     if (error) throw error;
     if (role === 'driver') {
       if (typeof is_online === 'boolean') {
-        const { error: driverError } = await supabase
+        const { error: driverError } = await userClient
         .from('driver_details')
         .update({
           is_online
@@ -396,7 +398,7 @@ router.put('/', authenticate, userLimiter, validateBody(updateProfileSchema), as
 
       if (number_plate !== undefined) {
         const normalizedPlate = sanitizeNumberPlate(number_plate);
-        const { error: truckError } = await supabase
+        const { error: truckError } = await userClient
           .from('trucks')
           .update({
             number_plate: normalizedPlate
