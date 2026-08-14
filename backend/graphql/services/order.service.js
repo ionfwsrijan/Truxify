@@ -30,6 +30,7 @@ function mapOrder(row) {
         cargoType: row.cargoType ?? row.goods_type,
         weight: row.weight ?? row.weight_tonnes,
         amount: row.amount ?? row.total_amount,
+        currency: 'INR',
         pickup: {
             lat: row.pickup_lat,
             lng: row.pickup_lng,
