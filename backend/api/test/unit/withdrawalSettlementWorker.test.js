@@ -25,15 +25,20 @@ vi.mock('../../src/core/telemetry/WorkerTracer.js', () => ({
 
 const { settlePendingWithdrawals } = await import('../../src/workers/withdrawalSettlementWorker.js');
 
-function mockPendingWithdrawals(rows) {
+function mockPendingWithdrawals(rows, { claimResult = [{ id: 'w1' }] } = {}) {
   const query = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     is: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue({ data: rows, error: null }),
-    update: vi.fn().mockReturnThis(),
   };
+  query.update = vi.fn().mockImplementation(() => ({
+    eq: vi.fn().mockReturnThis(),
+    is: vi.fn().mockReturnThis(),
+    select: vi.fn().mockResolvedValue({ data: claimResult, error: null }),
+    then: (onFulfilled) => Promise.resolve({ data: null, error: null }).then(onFulfilled),
+  }));
   admin.from.mockReturnValue(query);
   return query;
 }
@@ -61,8 +66,8 @@ describe('Withdrawal Settlement Worker', () => {
 
   it('settles pending withdrawals through the payout provider', async () => {
     mockPendingWithdrawals([
-      { id: 'w1', driver_id: 'd1', amount: 1000, payout_attempted_at: null },
-      { id: 'w2', driver_id: 'd2', amount: 500, payout_attempted_at: null },
+      { id: 'w1', driver_id: 'd1', amount: 1000, payout_attempted_at: null, settlement_ref: null },
+      { id: 'w2', driver_id: 'd2', amount: 500, payout_attempted_at: null, settlement_ref: null },
     ]);
     dispatchPayoutMock
       .mockResolvedValueOnce({ success: true, settlementRef: 'ref-1' })
@@ -71,6 +76,14 @@ describe('Withdrawal Settlement Worker', () => {
     await settlePendingWithdrawals();
 
     expect(dispatchPayoutMock).toHaveBeenCalledTimes(2);
+    expect(dispatchPayoutMock).toHaveBeenCalledWith({
+      driverId: 'd1',
+      withdrawal: expect.objectContaining({ id: 'w1' }),
+    });
+    expect(dispatchPayoutMock).toHaveBeenCalledWith({
+      driverId: 'd2',
+      withdrawal: expect.objectContaining({ id: 'w2' }),
+    });
     expect(admin.rpc).toHaveBeenCalledWith('settle_withdrawal_tx', {
       p_withdrawal_id: 'w1',
       p_settlement_ref: 'ref-1',
@@ -83,7 +96,7 @@ describe('Withdrawal Settlement Worker', () => {
   });
 
   it('marks a withdrawal failed and restores funds when the payout dispatch fails', async () => {
-    mockPendingWithdrawals([{ id: 'w1', driver_id: 'd1', amount: 1000, payout_attempted_at: null }]);
+    mockPendingWithdrawals([{ id: 'w1', driver_id: 'd1', amount: 1000, payout_attempted_at: null, settlement_ref: null }]);
     dispatchPayoutMock.mockRejectedValue(new Error('bank rejected'));
 
     await settlePendingWithdrawals();
@@ -97,7 +110,7 @@ describe('Withdrawal Settlement Worker', () => {
 
   it('does not restore funds when settle fails after a successful dispatch', async () => {
     vi.useFakeTimers();
-    mockPendingWithdrawals([{ id: 'w1', driver_id: 'd1', amount: 1000, payout_attempted_at: null }]);
+    mockPendingWithdrawals([{ id: 'w1', driver_id: 'd1', amount: 1000, payout_attempted_at: null, settlement_ref: null }]);
     dispatchPayoutMock.mockResolvedValue({ success: true, settlementRef: 'ref-1' });
     admin.rpc.mockImplementation((name) =>
       name === 'settle_withdrawal_tx'
@@ -130,6 +143,18 @@ describe('Withdrawal Settlement Worker', () => {
       p_settlement_ref: 'ref-1',
     });
     expect(admin.rpc).not.toHaveBeenCalledWith('fail_withdrawal_tx', expect.anything());
+  });
+
+  it('skips a withdrawal already claimed by another sweep', async () => {
+    mockPendingWithdrawals(
+      [{ id: 'w1', driver_id: 'd1', amount: 1000, payout_attempted_at: null, settlement_ref: null }],
+      { claimResult: [] }
+    );
+
+    await settlePendingWithdrawals();
+
+    expect(dispatchPayoutMock).not.toHaveBeenCalled();
+    expect(admin.rpc).not.toHaveBeenCalled();
   });
 
   it('does not settle anything when the pending query errors', async () => {
