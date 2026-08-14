@@ -157,6 +157,29 @@ export async function uploadMaintenancePhotos(req, res) {
       uploadedPaths.push(storagePath);
     }
 
+    // Normalize previously persisted paths (stored by the append RPC) to the
+    // same signed-URL form used for freshly uploaded files, so the returned
+    // photo_urls array is uniformly usable by clients.
+    const existingPhotoUrls = [];
+    for (const path of existingUrls) {
+      // Legacy rows may already hold full URLs; leave those untouched.
+      if (/^https?:\/\//.test(path)) {
+        existingPhotoUrls.push(path);
+        continue;
+      }
+      const { data: urlData, error: urlError } = await supabase.storage
+        .from('maintenance-photos')
+        .createSignedUrl(path, 60 * 60 * 24 * 7); // 7-day expiry
+
+      if (urlError) {
+        logger.error('[MaintenancePhotoController] Failed to create signed URL:', urlError.message);
+        await cleanupStorage(uploadedPaths);
+        return res.status(500).json({ error: 'Failed to generate photo URL' });
+      }
+
+      existingPhotoUrls.push(urlData.signedUrl);
+    }
+
     // Generate signed URLs for the uploaded files
     const photoUrls = [];
     for (const path of uploadedPaths) {
@@ -195,7 +218,7 @@ export async function uploadMaintenancePhotos(req, res) {
 
     return res.status(200).json({
       success: true,
-      photo_urls: [...existingUrls, ...photoUrls],
+      photo_urls: [...existingPhotoUrls, ...photoUrls],
       uploaded_count: photoUrls.length,
     });
   } catch (err) {
