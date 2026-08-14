@@ -11,10 +11,12 @@ vi.mock('../../src/config/db.js', () => ({
 
 const dispatchPayoutMock = vi.fn();
 const isPayoutProviderConfiguredMock = vi.fn();
+const PayoutTimeoutErrorMock = class PayoutTimeoutError extends Error {};
 
 vi.mock('../../src/services/wallet/payoutProvider.js', () => ({
   dispatchPayout: dispatchPayoutMock,
   isPayoutProviderConfigured: isPayoutProviderConfiguredMock,
+  PayoutTimeoutError: PayoutTimeoutErrorMock,
 }));
 
 vi.mock('../../src/core/telemetry/WorkerTracer.js', () => ({
@@ -80,6 +82,22 @@ describe('Withdrawal Settlement Worker', () => {
       p_settlement_ref: 'ref-2',
     });
     expect(admin.rpc).not.toHaveBeenCalledWith('fail_withdrawal_tx', expect.anything());
+  });
+
+  it('does not restore funds when the payout dispatch times out', async () => {
+    mockPendingWithdrawals([{ id: 'w1', driver_id: 'd1', amount: 1000, payout_attempted_at: null }]);
+    dispatchPayoutMock.mockRejectedValue(new PayoutTimeoutErrorMock('Payout webhook did not respond within 15000ms.'));
+
+    await settlePendingWithdrawals();
+
+    // The payout may have been accepted — funds must NEVER be restored via
+    // fail_withdrawal_tx. The row stays pending with a settlement_error marker.
+    expect(admin.rpc).not.toHaveBeenCalledWith('fail_withdrawal_tx', expect.anything());
+    expect(admin.rpc).not.toHaveBeenCalledWith('settle_withdrawal_tx', expect.anything());
+    const updateCalls = admin.from().update.mock.calls;
+    expect(updateCalls[1][0]).toEqual({
+      settlement_error: 'Payout webhook did not respond within 15000ms.',
+    });
   });
 
   it('marks a withdrawal failed and restores funds when the payout dispatch fails', async () => {

@@ -3,6 +3,7 @@ import logger from "../middleware/logger.js";
 import {
   dispatchPayout,
   isPayoutProviderConfigured,
+  PayoutTimeoutError,
 } from "../services/wallet/payoutProvider.js";
 import { WorkerTracer } from "../core/telemetry/WorkerTracer.js";
 
@@ -136,6 +137,10 @@ async function settleWithRetry(withdrawalId, settlementRef) {
  * Failure-mode split (Issue #6274):
  *   - dispatchPayout failed BEFORE money left the platform -> fail the
  *     withdrawal and restore the reserved funds to wallet_confirmed;
+ *   - dispatchPayout timed out (PayoutTimeoutError) -> the provider may or may
+ *     not have accepted the payout; NEVER restore funds. The row stays
+ *     'pending' with payout_attempted_at set and a settlement_error marker for
+ *     the next sweep or an operator to reconcile;
  *   - dispatchPayout succeeded but settle_withdrawal_tx failed -> NEVER
  *     restore funds. The row stays 'pending' with payout_attempted_at set so
  *     the next sweep detects it and retries the (idempotent) settle call.
@@ -212,6 +217,33 @@ export async function settlePendingWithdrawals() {
           );
         }
       } catch (err) {
+        if (err instanceof PayoutTimeoutError) {
+          // Ambiguous: the provider may have accepted the payout but the
+          // response was slow or lost. Never restore funds — leave the row
+          // 'pending' with payout_attempted_at set and record settlement_error
+          // so the next sweep or an operator can reconcile instead of
+          // double-paying the driver.
+          logger.error(
+            `[WithdrawalSettlementWorker] Withdrawal ${withdrawal.id} payout dispatch timed out — provider may have accepted it: ${err.message}`,
+          );
+
+          const { error: markErr } = await supabaseAdmin
+            .from("wallet_transactions")
+            .update({
+              settlement_error: String(err.message || "Unknown error").slice(0, 1000),
+            })
+            .eq("id", withdrawal.id)
+            .eq("status", "pending");
+
+          if (markErr) {
+            logger.error(
+              `[WithdrawalSettlementWorker] Failed to record timeout marker for withdrawal ${withdrawal.id}: ${markErr.message}`,
+            );
+          }
+
+          continue;
+        }
+
         if (isAmbiguousDispatchError(err)) {
           // The payout may already have been committed at the gateway before
           // the request errored (timeout/network/5xx/unknown). Restoring the

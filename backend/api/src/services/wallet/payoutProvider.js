@@ -24,6 +24,13 @@ function payoutTimeoutMs() {
     : DEFAULT_PAYOUT_TIMEOUT_MS;
 }
 
+export class PayoutTimeoutError extends Error {
+  constructor(timeoutMs) {
+    super(`Payout webhook did not respond within ${timeoutMs}ms.`);
+    this.name = 'PayoutTimeoutError';
+  }
+}
+
 export function isPayoutProviderConfigured() {
   return Boolean(
     process.env.WITHDRAWAL_PAYOUT_PROVIDER ||
@@ -61,12 +68,12 @@ export async function dispatchPayout({ driverId, withdrawal }) {
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
-      // A timeout is indistinguishable from any other transport failure: the
-      // payout may or may not have been accepted. Surface it as a dispatch
-      // failure so the caller keeps its existing fail-safe handling rather
-      // than hanging the settlement worker forever.
+      // A timeout is ambiguous: the payout may or may not have been accepted.
+      // Surface it as a distinct PayoutTimeoutError so the caller never treats
+      // it like a confirmed non-dispatch (which would restore funds and
+      // double-pay the driver).
       if (err.name === 'TimeoutError' || err.name === 'AbortError') {
-        throw new Error(`Payout webhook did not respond within ${timeoutMs}ms.`, { cause: err });
+        throw new PayoutTimeoutError(timeoutMs);
       }
       throw err;
     }
