@@ -1,18 +1,12 @@
 import logger from '../middleware/logger.js';
 
-const RUSH_HOUR_START_AM = 7;
-const RUSH_HOUR_END_AM = 10;
-const RUSH_HOUR_START_PM = 16;
-const RUSH_HOUR_END_PM = 19;
-const MIN_SURGE_MULTIPLIER = 1.2;
 const MAX_SURGE_MULTIPLIER = 2.5;
-const SURGE_PEAK_AMPLITUDE = 1.3;
 
 /**
  * Calculates a live traffic multiplier for a given pickup location.
- * Combines TOMTOM/Google Maps real-time traffic data with a sinusoidal rush-hour
- * surge overlay (7-10 AM and 4-7 PM UTC). Falls back to rush-hour only if no API key
- * is configured or the request fails.
+ * Derives the multiplier from TOMTOM/Google Maps real-time traffic data only.
+ * Returns 1.0 (no surge) when no API key is configured, the request fails,
+ * or the API reports no congestion.
  *
  * @param {number} pickupLat - Pickup latitude
  * @param {number} pickupLng - Pickup longitude
@@ -52,8 +46,10 @@ export async function getLiveTrafficMultiplier(pickupLat, pickupLng) {
         }
       }
     } else {
-      // No traffic API key -- fall back to a deterministic rush-hour multiplier.
-      multiplier = getRushHourMultiplier(new Date());
+      // No traffic API key configured -- there is no real traffic data to base a
+      // surge on, so pricing stays neutral (1.0) instead of applying a
+      // fabricated rush-hour surge.
+      multiplier = 1.0;
     }
 
     if (multiplier > 1.0) {
@@ -64,26 +60,4 @@ export async function getLiveTrafficMultiplier(pickupLat, pickupLng) {
     logger.error({ err: error }, '[TrafficService] Error fetching live traffic data -- returning 1.0');
     return 1.0;
   }
-}
-
-/**
- * Returns a rush-hour surge multiplier based on the hour of day (UTC).
- * Peaks at MIN_SURGE_MULTIPLIER + SURGE_PEAK_AMPLITUDE during the center of
- * the rush-hour windows (morning 7-10 UTC, evening 16-19 UTC).
- *
- * @param {Date} date - Date/time to evaluate
- * @returns {number} Surge multiplier between MIN_SURGE_MULTIPLIER and MAX_SURGE_MULTIPLIER
- */
-function getRushHourMultiplier(date) {
-  const hour = date.getUTCHours();
-  const isMorningRush = hour >= RUSH_HOUR_START_AM && hour < RUSH_HOUR_END_AM;
-  const isEveningRush = hour >= RUSH_HOUR_START_PM && hour < RUSH_HOUR_END_PM;
-  if (!isMorningRush && !isEveningRush) {
-    return 1.0;
-  }
-  const peakHour = isMorningRush
-    ? (hour - RUSH_HOUR_START_AM) / (RUSH_HOUR_END_AM - RUSH_HOUR_START_AM)
-    : (hour - RUSH_HOUR_START_PM) / (RUSH_HOUR_END_PM - RUSH_HOUR_START_PM);
-  const surge = MIN_SURGE_MULTIPLIER + SURGE_PEAK_AMPLITUDE * Math.sin(peakHour * Math.PI);
-  return Number(Math.min(MAX_SURGE_MULTIPLIER, Math.max(MIN_SURGE_MULTIPLIER, surge)).toFixed(2));
 }
