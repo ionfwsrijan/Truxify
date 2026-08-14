@@ -88,45 +88,55 @@ export const handshake = async (req, res, next) => {
         let allCompliant = true;
 
         for (const address of escorts) {
-            const credentials = await didService.getCredentials(address);
+            try {
+                const credentials = await didService.getCredentials(address);
+                
+                if (!credentials || credentials.length === 0) {
+                    complianceStatus.push({
+                        address,
+                        compliant: false,
+                        reason: 'No credentials found'
+                    });
+                    allCompliant = false;
+                    continue;
+                }
 
-            if (!credentials || credentials.length === 0) {
+                let escortCompliant = true;
+                const validCredentials = [];
+
+                for (const cred of credentials) {
+                    if (cred.revoked) continue;
+                    
+                    // Verify against registry
+                    const verification = await didService.verifyCredential(cred.id);
+                    if (verification.isValid) {
+                        validCredentials.push(cred);
+                    }
+                }
+
+                if (validCredentials.length === 0) {
+                    escortCompliant = false;
+                    allCompliant = false;
+                }
+
+                complianceStatus.push({
+                    address,
+                    compliant: escortCompliant,
+                    credentials: validCredentials.map(c => ({
+                        id: c.id,
+                        type: c.type,
+                        validUntil: c.validUntil
+                    }))
+                });
+            } catch (error) {
+                logger.error(`Handshake address resolution failed for ${address}:`, error);
                 complianceStatus.push({
                     address,
                     compliant: false,
-                    reason: 'No credentials found'
+                    reason: 'Address resolution failed'
                 });
                 allCompliant = false;
-                continue;
             }
-
-            let escortCompliant = true;
-            const validCredentials = [];
-
-            for (const cred of credentials) {
-                if (cred.revoked) continue;
-
-                // Verify against registry
-                const verification = await didService.verifyCredential(cred.id);
-                if (verification.isValid) {
-                    validCredentials.push(cred);
-                }
-            }
-
-            if (validCredentials.length === 0) {
-                escortCompliant = false;
-                allCompliant = false;
-            }
-
-            complianceStatus.push({
-                address,
-                compliant: escortCompliant,
-                credentials: validCredentials.map(c => ({
-                    id: c.id,
-                    type: c.type,
-                    validUntil: c.validUntil
-                }))
-            });
         }
 
         return res.status(200).json({
