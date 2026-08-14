@@ -1197,6 +1197,84 @@ router.get('/my/history', authenticate, userLimiter, requirePolicy('order:view-h
   }
 });
 
+// ============================================================================
+// 21. DRIVER LOAD MARKET (DRIVER) — GET /api/orders/load-offers[/en-route]
+// ============================================================================
+
+// load_offers is RLS-protected with all anon privileges revoked, so the
+// marketplace board must read through the service-role client.
+const fetchAvailableLoadOffers = async ({ limit = 100 } = {}) => {
+  const { data: offers, error } = await supabaseAdmin
+    .from('load_offers')
+    .select('*')
+    .eq('status', 'available')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    logger.error('Failed to fetch load offers:', error);
+    const err = new Error('Failed to fetch load offers.');
+    err.status = 500;
+    throw err;
+  }
+  return offers || [];
+};
+
+// Map fields for client compatibility (mirrors loadRoutes.js)
+const formatLoadOffer = (load) => ({
+  ...load,
+  pickup: load.pickup_address,
+  destination: load.drop_address,
+  estimated_price: load.freight_value / 100, // freight_value stored in paisa — divide by 100 for INR display
+  vehicle_type: 'Truck',
+});
+
+// GET /api/orders/load-offers
+// Returns all available load offers as a bare list, matching the app's
+// marketplace_repository.dart contract (expects a top-level JSON array).
+router.get('/load-offers', authenticate, userLimiter, requirePolicy('load-offer:browse'), async (req, res) => {
+  try {
+    const offers = await fetchAvailableLoadOffers();
+    return res.json(offers.map(formatLoadOffer));
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    logger.error('GET /api/orders/load-offers exception:', err.message);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET /api/orders/load-offers/en-route?current_lat=&current_lng=&max_detour_km=
+// Returns available load offers ranked by detour from the driver's current
+// location via matchEnRouteLoads (ML with haversine fallback).
+router.get('/load-offers/en-route', authenticate, userLimiter, requirePolicy('load-offer:browse'), async (req, res) => {
+  try {
+    const currentLat = req.query.current_lat ? parseFloat(req.query.current_lat) : NaN;
+    const currentLng = req.query.current_lng ? parseFloat(req.query.current_lng) : NaN;
+    const maxDetourKm = req.query.max_detour_km ? parseFloat(req.query.max_detour_km) : 50;
+
+    // No driver location — nothing to rank as en-route. The marketplace's
+    // separate fetchLoadOffers() call already lists all available loads.
+    if (!Number.isFinite(currentLat) || !Number.isFinite(currentLng)) {
+      return res.json([]);
+    }
+    if (!Number.isFinite(maxDetourKm) || maxDetourKm <= 0) {
+      return res.status(400).json({ error: 'max_detour_km must be a positive number' });
+    }
+
+    const offers = await fetchAvailableLoadOffers();
+    const matched = await matchEnRouteLoads({ currentLat, currentLng, offers, maxDetourKm });
+    return res.json(matched.map(formatLoadOffer));
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    logger.error('GET /api/orders/load-offers/en-route exception:', err.message);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 // GET /api/orders/:id/timeline
 router.get('/:id/timeline', authenticate, userLimiter, requirePolicy('order:view-timeline', async (req) => {
   const order = await orderValidationService.findOrderByIdOrDisplayId(req.params.id, 'id, customer_id, driver_id');
