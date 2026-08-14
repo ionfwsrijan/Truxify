@@ -1,10 +1,10 @@
-import { supabase } from '../../api/src/config/db.js';
+import { supabaseAdmin } from '../../api/src/config/db.js';
 import logger from '../../api/src/middleware/logger.js';
 
 class EventRepository {
   async saveEvent(event) {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('events')
         .insert([{
           event_id: event.eventId,
@@ -27,7 +27,7 @@ class EventRepository {
 
   async getEventsByOrderId(orderId, limit = 100) {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('events')
         .select('*')
         .eq('order_id', orderId)
@@ -44,7 +44,7 @@ class EventRepository {
 
   async getEventsByType(eventType, limit = 100) {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('events')
         .select('*')
         .eq('event_type', eventType)
@@ -61,7 +61,7 @@ class EventRepository {
 
   async getEventById(eventId) {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('events')
         .select('*')
         .eq('event_id', eventId)
@@ -175,7 +175,7 @@ class EventRepository {
 
   async getEventStats() {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('events')
         .select('event_type');
 

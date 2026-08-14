@@ -1,4 +1,4 @@
-import { supabase } from '../../api/src/config/db.js';
+import { supabaseAdmin } from '../../api/src/config/db.js';
 import logger from '../../api/src/middleware/logger.js';
 import eventRepository from '../repositories/event.repository.js';
 
@@ -47,7 +47,7 @@ class OrderReadModel {
   async updateReadModel(orderId, snapshot) {
     try {
       // Upsert read model
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('order_read_models')
         .upsert([{
           order_id: orderId,
@@ -90,7 +90,7 @@ class OrderReadModel {
     
     try {
       // Get from database
-      const { data, error } = await supabase
+      const { data, error } = await supabaseAdmin
         .from('order_read_models')
         .select('*')
         .eq('order_id', orderId)
@@ -116,7 +116,7 @@ class OrderReadModel {
 
   async getAllOrdersReadModel(filters = {}) {
     try {
-      let query = supabase
+      let query = supabaseAdmin
         .from('order_read_models')
         .select('*');
       
@@ -174,7 +174,7 @@ class OrderReadModel {
     const stats = {};
 
     for (const status of statuses) {
-      const { count, error } = await supabase
+      const { count, error } = await supabaseAdmin
         .from('order_read_models')
         .select('*', { count: 'exact', head: true })
         .eq('status', status);
