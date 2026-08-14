@@ -329,6 +329,10 @@ export const getLiveRouteGeometry = async (req, res) => {
       return res.status(500).json({ error: 'Order is missing destination coordinates.' });
     }
 
+    if (order.pickup_lat == null || order.pickup_lng == null) {
+      return res.status(500).json({ error: 'Order is missing pickup coordinates.' });
+    }
+
     if (!order.driver_id) {
       const originLat = Number(order.pickup_lat);
       const originLng = Number(order.pickup_lng);
