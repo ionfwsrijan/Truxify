@@ -193,6 +193,23 @@ import { computeOrderPricing } from '../lib/pricing.js';
 
 const router = express.Router();
 
+const DEFAULT_ORDER_HISTORY_LIMIT = 20;
+const MAX_ORDER_HISTORY_LIMIT = 100;
+
+function parseHistoryLimitQuery(value) {
+  if (value === undefined) return { value: DEFAULT_ORDER_HISTORY_LIMIT };
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+    return { error: 'Query value must be a positive integer' };
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (parsed < 1) {
+    return { error: 'Query value must be a positive integer' };
+  }
+
+  return { value: Math.min(parsed, MAX_ORDER_HISTORY_LIMIT) };
+}
+
 const getOrderResource = async (req) => {
   const { id } = req.params;
   if (!id) return null;
@@ -1152,7 +1169,11 @@ router.get('/history', authenticate, userLimiter, requirePolicy('order:view-hist
   }
 
   const page = cursor ? parseInt(cursor, 10) : (parseInt(req.query.page, 10) || 1);
-  const limit = parseInt(req.query.limit, 10) || 20;
+  const parsedLimit = parseHistoryLimitQuery(req.query.limit);
+  if (parsedLimit.error) {
+    return res.status(400).json({ error: parsedLimit.error });
+  }
+  const limit = parsedLimit.value;
 
   try {
     const result = await orderLifecycleService.getOrderHistory(req.user.id, page, limit);
@@ -1186,7 +1207,11 @@ router.get('/my/history', authenticate, userLimiter, requirePolicy('order:view-h
   }
 
   const page = cursor ? parseInt(cursor, 10) : (parseInt(req.query.page, 10) || 1);
-  const limit = parseInt(req.query.limit, 10) || 20;
+  const parsedLimit = parseHistoryLimitQuery(req.query.limit);
+  if (parsedLimit.error) {
+    return res.status(400).json({ error: parsedLimit.error });
+  }
+  const limit = parsedLimit.value;
 
   try {
     const result = await orderLifecycleService.getOrderHistory(req.user.id, page, limit);
