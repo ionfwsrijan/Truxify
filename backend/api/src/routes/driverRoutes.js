@@ -1406,7 +1406,7 @@ async function handleDriverEarningsAndStatement(req, res, filename, errorLabel) 
       const baseFreight = Number(trip.base_freight) || 0;
       const platformFee = Number(trip.platform_fee) || 0;
       const tollEstimate = Number(trip.toll_estimate) || 0;
-      const netEarnings = baseFreight - platformFee;
+      const netEarnings = baseFreight + tollEstimate;
 
       totalBaseFreight += baseFreight;
       totalPlatformFees += platformFee;
