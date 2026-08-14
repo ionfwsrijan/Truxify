@@ -33,6 +33,7 @@ services:
       MONGODB_URI: ${MONGODB_URI:?MONGODB_URI is required}
       REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
       ML_API_KEY: ${ML_API_KEY:?ML_API_KEY is required}
+      VALID_API_KEYS: ${VALID_API_KEYS:?VALID_API_KEYS is required}
       ML_ENGINE_URL: http://ml-engine:8000
       # Malware scanning
       CLAMAV_HOST: clamav

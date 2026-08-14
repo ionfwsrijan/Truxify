@@ -29,6 +29,7 @@ services:
       MONGODB_DB_NAME: truxify_telemetry
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       ML_API_KEY: ${ML_API_KEY:?ML_API_KEY is required}
+      VALID_API_KEYS: ${VALID_API_KEYS:?VALID_API_KEYS is required}
       ML_ENGINE_URL: http://ml-engine:8000
       OSRM_BASE_URL: http://osrm:5000
       # Shard Configuration
