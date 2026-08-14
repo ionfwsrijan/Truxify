@@ -98,6 +98,7 @@ create table if not exists driver_details (
   wallet_confirmed  int not null default 0 check (wallet_confirmed >= 0),   -- paisa
   wallet_pending    int not null default 0 check (wallet_pending >= 0),
   wallet_total      int not null default 0,
+  polygon_wallet_address text,                                  -- Polygon wallet address for escrow deposits
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now()
 );
