@@ -144,12 +144,12 @@ import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 
 import { bidLimiter, userLimiter, safeIpKeyGenerator, createStore } from '../middleware/rateLimiter.js';
+import { createUserClient } from '../config/db.js';
 import { authenticate, requireRole } from '../middleware/auth.js';
 import { requirePolicy } from '../middleware/requirePolicy.js';
 import { validateDocumentBuffer } from '../lib/documentValidation.js';
 import { scanDocument } from '../lib/malwareScanner.js';
 import { validateBody, validateParams, validateQuery } from '../middleware/validate.js';
-import { z } from 'zod';
 import {
   createOrderSchema, submitBidSchema, submitRatingSchema, paramIdSchema, acceptBidParamsSchema,
   updateMilestoneSchema, verifyDeliverySchema, predictDemandSchema, changeDropSchema, cancelOrderSchema,
@@ -209,8 +209,6 @@ const milestoneLimiter = rateLimit({
 
 import { getRouteEstimate, getRouteGeometry, buildStraightLineGeometry } from '../services/osrm.js';
 import { computeOrderPricing } from '../lib/pricing.js';
-
-const router = express.Router();
 
 const getOrderResource = async (req) => {
   const { id } = req.params;
@@ -805,6 +803,8 @@ router.post('/:id/pod', authenticate, requireRole(['driver']), podUploadLimiter,
     if (orderErr || !order) return res.status(404).json({ error: 'Order not found' });
     if (order.driver_id !== req.user.id) return res.status(403).json({ error: 'Access Denied: Not your order' });
 
+    const userClient = createUserClient(req.token);
+
     let signatureUrl = order.pod_signature_url;
     let photoUrl = order.pod_photo_url;
     let signatureHash = order.pod_signature_hash || null;
@@ -822,7 +822,7 @@ router.post('/:id/pod', authenticate, requireRole(['driver']), podUploadLimiter,
       }
       const ext = file.mimetype === 'image/png' ? 'png' : 'jpg';
       const storagePath = `${req.user.id}/pod_sig_${orderId}_${Date.now()}.${ext}`;
-      const { error: upErr } = await supabase.storage
+      const { error: upErr } = await userClient.storage
         .from('driver-documents')
         .upload(storagePath, file.buffer, { contentType: file.mimetype });
       if (upErr) {
@@ -843,7 +843,7 @@ router.post('/:id/pod', authenticate, requireRole(['driver']), podUploadLimiter,
       }
       const ext = file.mimetype === 'image/png' ? 'png' : 'jpg';
       const storagePath = `${req.user.id}/pod_photo_${orderId}_${Date.now()}.${ext}`;
-      const { error: upErr } = await supabase.storage
+      const { error: upErr } = await userClient.storage
         .from('driver-documents')
         .upload(storagePath, file.buffer, { contentType: file.mimetype });
       if (upErr) {
