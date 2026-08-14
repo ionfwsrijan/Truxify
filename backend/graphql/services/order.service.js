@@ -20,6 +20,15 @@ function isAdmin(user) {
     return ADMIN_ROLES.has(user?.role);
 }
 
+function haversineKm(lat1, lng1, lat2, lng2) {
+    if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) return null;
+    const toRad = (deg) => (deg * Math.PI) / 180;
+    const value =
+        Math.sin(toRad(lat1)) * Math.sin(toRad(lat2)) +
+        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lng1) - toRad(lng2));
+    return 6371.0088 * Math.acos(Math.min(1, Math.max(-1, value)));
+}
+
 function mapOrder(row) {
     if (!row) return row;
 
@@ -30,6 +39,7 @@ function mapOrder(row) {
         cargoType: row.cargoType ?? row.goods_type,
         weight: row.weight ?? row.weight_tonnes,
         amount: row.amount ?? row.total_amount,
+        distance: haversineKm(row.pickup_lat, row.pickup_lng, row.drop_lat, row.drop_lng),
         pickup: {
             lat: row.pickup_lat,
             lng: row.pickup_lng,
