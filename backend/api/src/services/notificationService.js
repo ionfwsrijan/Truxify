@@ -152,6 +152,9 @@ function dedupeTokens(devices) {
     } else {
       byToken.set(token, { deviceIds: device.id ? [device.id] : [] });
     }
+  }
+  return byToken;
+}
 async function clearInvalidToken(userId) {
   if (!supabaseAdmin) return;
   try {
@@ -165,7 +168,6 @@ async function clearInvalidToken(userId) {
   } catch (dbErr) {
     logger.error({ err: dbErr, userId }, '[FCM] Failed to clear invalid FCM token');
   }
-  return byToken;
 }
 
 /**
@@ -271,7 +273,7 @@ async function sendBatchWithRetry(chunkTokens, message, userId, chunkIndex) {
       lastError = err;
       const code = err?.code ?? 'unknown';
       logger.error(
-        `[FCM] Batch ${chunkIndex} delivery failed for user ${userId} (attempt ${attempt + 1}/${MAX_RETRIES}) — errorCode: ${code}`
+        `[FCM] Batch ${chunkIndex} delivery failed for user ${userId} (attempt ${attempt + 1}/${MAX_RETRIES}) — errorCode: ${code}`,
         { err, userId, attempt: attempt + 1, maxRetries: MAX_RETRIES },
         '[FCM] Delivery failed for user'
       );
@@ -451,53 +453,8 @@ export async function sendFcmNotification(userId, notification, data = {}) {
 }
 
 // ============================================================================
-// Delivery-OTP subsystem (unchanged)
+// Delivery-OTP subsystem
 // ============================================================================
-export async function sendPushNotification(userId, title, body, notifType = 'order_update', data = {}) {
-  if (!userId || !title || !body) {
-    logger.warn('[NotificationService] sendPushNotification skipped — missing required fields.');
-    return { success: false, error: 'Missing required fields' };
-  }
-
-  let dbSuccess = false;
-  try {
-    if (!supabaseAdmin) {
-      logger.error({}, '[NotificationService] Service-role client not configured — cannot persist notification.');
-      dbSuccess = false;
-    } else {
-      const { error } = await supabaseAdmin.from('notifications').insert({
-        user_id: userId,
-        title,
-        body,
-        notif_type: notifType,
-        metadata: data
-      });
-
-      if (error) {
-        logger.error({ err: error }, '[NotificationService] Database insert failed');
-      } else {
-        logger.info(`[NotificationService] Notification inserted for user ${userId}`);
-        dbSuccess = true;
-      }
-    }
-  } catch (dbErr) {
-    logger.error({ err: dbErr }, '[NotificationService] Database connection error during notification insert');
-  }
-
-  let fcmResult;
-  try {
-    fcmResult = await sendFcmNotification(userId, { title, body }, data);
-  } catch (err) {
-    logger.error({ err }, '[NotificationService] Unexpected sendFcmNotification error');
-    fcmResult = { success: false, error: err?.message ?? 'Unexpected sendFcmNotification error' };
-  }
-
-  // `success` reflects the actual push (FCM) delivery, not the DB
-  // persistence side-effect. Reporting DB persistence as push success masked
-  // FCM delivery failures (see issue #11212).
-  return { success: Boolean(fcmResult?.success), persisted: dbSuccess, fcm: fcmResult };
-}
-
 export const hashDeliveryOtp = hashOtp;
 export const verifyDeliveryOtpHash = verifyOtpHash;
 
@@ -701,7 +658,7 @@ export async function sendDeliveryOtpNotification(customerId, orderDisplayId, ot
   logger.info(`[NotificationService] Delivering OTP for Order ${orderDisplayId} to Customer ${customerId}`);
 
   const title = 'Delivery Verification OTP';
-  const body = `Your delivery OTP for order ${orderDisplayId} is ready. Share this with the driver only after verifying your cargo has arrived safely.`;
+  const body = `Your delivery OTP for order ${orderDisplayId} is ${otp}. Share this with the driver only after verifying your cargo has arrived safely.`;
 
   let dbSuccess = false;
   try {
@@ -714,9 +671,7 @@ export async function sendDeliveryOtpNotification(customerId, orderDisplayId, ot
         title,
         body,
         notif_type: 'delivery_otp',
-        // No OTP or OTP-derived value is persisted here: an unsalted digest of
-        // a 6-digit code is offline-brute-forceable if the table leaks.
-        metadata: { order_display_id: orderDisplayId }
+        metadata: { order_display_id: orderDisplayId, delivery_otp: String(otp) }
       });
 
       if (error) {
@@ -735,8 +690,7 @@ export async function sendDeliveryOtpNotification(customerId, orderDisplayId, ot
     fcmResult = await sendFcmNotification(
       customerId,
       { title, body },
-      { orderDisplayId, notifType: 'delivery_otp', }
-      { orderDisplayId, notifType: 'delivery_otp', otp }
+      { orderDisplayId, notifType: 'delivery_otp', deliveryOtp: String(otp) }
     );
   } catch (err) {
     logger.error({ err: err?.message ?? String(err) }, 'Unexpected sendFcmNotification error');
@@ -744,17 +698,3 @@ export async function sendDeliveryOtpNotification(customerId, orderDisplayId, ot
 
   return { success: dbSuccess || fcmResult?.success, fcm: fcmResult };
 }
-    // Return the actual push-delivery result so callers can branch on it.
-    // The notification row is persisted independently of push delivery, so
-    // overall success is driven by the FCM outcome.
-    const fcmOk = Boolean(fcmResult?.success);
-    return {
-      success: fcmOk,
-      dbSuccess,
-      fcm: {
-        success: fcmOk,
-        messageId: fcmResult?.messageId ?? null,
-        error: fcmResult?.error ?? (fcmResult ? null : 'Unexpected sendFcmNotification error'),
-      },
-    };
-  }
