@@ -276,7 +276,6 @@ class AtomicSwapService {
                 token_address: data.tokenAddress,
                 amount: data.amount,
                 hash_lock: data.hashLock,
-                secret: data.secret,
                 tx_hash: data.txHash,
                 status: 'pending',
                 created_at: new Date().toISOString()
@@ -296,7 +295,6 @@ class AtomicSwapService {
                 token_address: data.tokenAddress,
                 amount: data.amount,
                 hash_lock: data.hashLock,
-                secret: data.secret,
                 proof: data.proof,
                 tx_hash: data.txHash,
                 status: 'pending',
