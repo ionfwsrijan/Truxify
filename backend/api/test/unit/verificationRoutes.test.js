@@ -29,7 +29,7 @@ vi.mock('multer', () => {
 });
 
 const { dbMock, svcMock, dlMock, policyMock } = vi.hoisted(() => ({
-  dbMock: { supabase: { from: vi.fn() }, supabaseAdmin: { from: vi.fn() } },
+  dbMock: { supabase: { from: vi.fn() }, supabaseAdmin: { from: vi.fn() }, createUserClient: vi.fn(() => dbMock.supabase) },
   svcMock: { verificationService: { verifyOrder: vi.fn(), checkDocumentIntegrity: vi.fn() } },
   dlMock: { exchangeCode: vi.fn(), verifyDocuments: vi.fn() },
   policyMock: {
@@ -42,6 +42,7 @@ vi.mock('../../src/core/container.js', () => svcMock);
 vi.mock('../../src/config/db.js', () => ({
   get supabase() { return dbMock.supabase; },
   get supabaseAdmin() { return dbMock.supabaseAdmin; },
+  createUserClient: vi.fn(() => dbMock.supabase),
 }));
 vi.mock('../../src/security/policyEngine.js', () => policyMock);
 vi.mock('../../src/services/digilockerService.js', () => ({ default: dlMock }));

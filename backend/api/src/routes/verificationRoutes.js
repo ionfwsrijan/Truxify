@@ -2,7 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import rateLimit from 'express-rate-limit';
 import { verificationService } from '../core/container.js';
-import { supabase, supabaseAdmin, createUserClient } from '../config/db.js';
+import { supabaseAdmin, createUserClient } from '../config/db.js';
 import { authenticate } from '../middleware/auth.js';
 import { safeIpKeyGenerator, createStore } from '../middleware/rateLimiter.js';
 import { validateParams, validateBody } from '../middleware/validate.js';
@@ -61,7 +61,8 @@ const kycUploadLimiter = rateLimit({
 router.get('/order/:orderId', orderVerificationLimiter, authenticate, validateParams(verifyOrderParamsSchema), async (req, res) => {
   try {
     const { orderId } = req.params;
-    const { data: order, error: orderError } = await supabaseAdmin
+    const userClient = createUserClient(req.token);
+    const { data: order, error: orderError } = await userClient
       .from('orders')
       .select('id, customer_id, driver_id')
       .eq('id', orderId)
@@ -83,7 +84,7 @@ router.get('/order/:orderId', orderVerificationLimiter, authenticate, validatePa
 
     policy.authorize(req.user, 'order:view', { order });
 
-    const result = await verificationService.verifyOrder(orderId);
+    const result = await verificationService.verifyOrder(orderId, userClient);
 
     if (result.error && !result.orderId) {
       return res.status(404).json({
@@ -114,6 +115,7 @@ router.get('/order/:orderId', orderVerificationLimiter, authenticate, validatePa
 router.post('/documents/check', documentCheckLimiter, authenticate, validateBody(documentCheckSchema), async (req, res) => {
   try {
     const { driverId } = req.body;
+    const userClient = createUserClient(req.token);
 
     // IDOR guard: a caller may only inspect their own document/KYC status
     // unless they hold an admin role (mirrors the ownership check used on the
@@ -130,7 +132,7 @@ router.post('/documents/check', documentCheckLimiter, authenticate, validateBody
       throw error;
     }
 
-    const result = await verificationService.checkDocumentIntegrity(driverId);
+    const result = await verificationService.checkDocumentIntegrity(driverId, userClient);
 
     res.status(200).json({
       success: true,

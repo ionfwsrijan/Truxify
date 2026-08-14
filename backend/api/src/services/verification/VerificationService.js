@@ -22,9 +22,9 @@ class VerificationService {
     this.supabase = deps.supabase || supabase;
   }
 
-  async verifyOrder(orderId) {
+  async verifyOrder(orderId, client) {
     try {
-      const order = await this._getOrder(orderId);
+      const order = await this._getOrder(orderId, client);
       if (!order) {
         return { verified: false, error: 'Order not found' };
       }
@@ -37,8 +37,8 @@ class VerificationService {
         order.blockchain_tx_hash
           ? this.oracleService.verifyCrossChain(orderId, order.blockchain_tx_hash)
           : Promise.resolve({ verified: false, ipfsHash: null }),
-        order.driver_id ? this.checkDocumentIntegrity(order.driver_id) : Promise.resolve({ verified: false, documentsChecked: [], lastCheck: new Date().toISOString() }),
-        this._verifyDriver(order.driver_id),
+        order.driver_id ? this.checkDocumentIntegrity(order.driver_id, client) : Promise.resolve({ verified: false, documentsChecked: [], lastCheck: new Date().toISOString() }),
+        this._verifyDriver(order.driver_id, client),
       ]);
 
       const deliveryVerified = oracleResult.confirmed && ACTIVE_DELIVERY_STATUSES.has(order.status);
@@ -73,7 +73,7 @@ class VerificationService {
     }
   }
 
-  async _getOrder(orderId) {
+  async _getOrder(orderId, client) {
     if (this.orderRepository) {
       const { data, error } = await this.orderRepository.findOrderById(
         orderId,
@@ -83,7 +83,7 @@ class VerificationService {
       return data;
     }
 
-    const { data, error } = await this.supabase
+    const { data, error } = await (client || this.supabase)
       .from('orders')
       .select('id, order_display_id, status, customer_id, driver_id, truck_id, otp_verified, blockchain_tx_hash, escrow_status')
       .eq('id', orderId)
@@ -93,13 +93,13 @@ class VerificationService {
     return data;
   }
 
-  async _verifyDriver(driverId) {
+  async _verifyDriver(driverId, client) {
     if (!driverId) {
       return { verified: false, driverActive: false, reason: 'No driver assigned' };
     }
 
     try {
-      const { data: profile, error: profileErr } = await this.supabase
+      const { data: profile, error: profileErr } = await (client || this.supabase)
         .from('profiles')
         .select('id, is_active, role')
         .eq('id', driverId)
@@ -129,7 +129,7 @@ class VerificationService {
     }
   }
 
-  async checkDocumentIntegrity(driverId) {
+  async checkDocumentIntegrity(driverId, client) {
     if (!driverId) {
       return {
         verified: false,
@@ -143,7 +143,7 @@ class VerificationService {
     }
 
     try {
-      const { data: documents, error } = await this.supabase
+      const { data: documents, error } = await (client || this.supabase)
         .from('driver_documents')
         .select('document_type, status, created_at')
         .eq('driver_id', driverId);

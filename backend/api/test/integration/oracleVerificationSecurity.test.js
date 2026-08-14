@@ -92,6 +92,7 @@ const mockSupabase = {
 
 vi.mock('../../src/config/db.js', () => ({
   supabase: mockSupabase,
+  createUserClient: () => mockSupabase,
   firebaseAdmin: null,
   redisClient: null,
   mongoDb: null,
@@ -504,7 +505,7 @@ describe('Verification Routes — Document Check IDOR Guard', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(mockVerificationService.checkDocumentIntegrity).toHaveBeenCalledWith(VALID_DRIVER_ID);
+    expect(mockVerificationService.checkDocumentIntegrity).toHaveBeenCalledWith(VALID_DRIVER_ID, expect.anything());
   });
 
   it('returns 200 when an admin checks any driver\'s documents', async () => {
@@ -517,7 +518,7 @@ describe('Verification Routes — Document Check IDOR Guard', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(mockVerificationService.checkDocumentIntegrity).toHaveBeenCalledWith(OTHER_DRIVER_ID);
+    expect(mockVerificationService.checkDocumentIntegrity).toHaveBeenCalledWith(OTHER_DRIVER_ID, expect.anything());
   });
 });
 
