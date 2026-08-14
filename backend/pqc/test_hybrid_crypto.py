@@ -146,3 +146,17 @@ def test_hybrid_sign_verify_and_metrics(hybrid, hybrid_key):
     metrics = hybrid.get_key_metrics(hybrid_key)
     assert metrics['classical_key_size'] == 2048
     assert metrics['algorithm'] == 'RSA-2048 + Kyber-768 + Dilithium'
+
+
+def test_sign_verify_use_passed_key(hybrid):
+    """Verify hybrid_sign/hybrid_verify honor the passed key instead of the
+    shared global Dilithium instance (issue #10933)."""
+    key_a = hybrid.generate_hybrid_keypair()
+    key_b = hybrid.generate_hybrid_keypair()
+    message = b"Keyed signing message"
+
+    sig_a = hybrid.hybrid_sign(message, key_a)
+
+    assert hybrid.hybrid_verify(message, sig_a, key_a) is True
+    assert hybrid.hybrid_verify(message, sig_a, key_b) is False
+    assert hybrid.hybrid_verify(b"Tampered", sig_a, key_a) is False

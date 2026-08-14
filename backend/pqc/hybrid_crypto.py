@@ -179,12 +179,17 @@ class HybridCrypto:
         }
     
     def hybrid_sign(self, data: bytes, hybrid_key: Dict) -> bytes:
-        """Sign using Dilithium"""
-        return self.dilithium.sign(data)
+        """Sign using Dilithium with the caller-supplied key"""
+        dilithium = DilithiumSignature()
+        dilithium.private_key = hybrid_key['dilithium']['private']
+        dilithium.public_key = hybrid_key['dilithium']['public']
+        return dilithium.sign(data)
     
     def hybrid_verify(self, data: bytes, signature: bytes, hybrid_key: Dict) -> bool:
-        """Verify using Dilithium"""
-        return self.dilithium.verify(data, signature)
+        """Verify using Dilithium with the caller-supplied key"""
+        dilithium = DilithiumSignature()
+        dilithium.public_key = hybrid_key['dilithium']['public']
+        return dilithium.verify(data, signature)
     
     def get_key_metrics(self, hybrid_key: Dict) -> Dict:
         """Get key metrics"""
