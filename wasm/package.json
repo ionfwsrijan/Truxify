@@ -1,6 +1,7 @@
 {
   "name": "truxify-wasm",
   "version": "1.0.0",
+  "type": "module",
   "description": "WebAssembly Edge Computing for Truxify",
   "scripts": {
     "build": "wasm-pack build --target nodejs",
