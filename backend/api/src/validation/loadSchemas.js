@@ -46,13 +46,13 @@ export const loadFilterQuerySchema = z.object({
 
 export const createLoadSchema = z.object({
   origin: z.object({
-    lat: z.coerce.number(),
-    lng: z.coerce.number(),
+    lat: z.coerce.number().min(-90).max(90),
+    lng: z.coerce.number().min(-180).max(180),
     address: z.string().optional(),
   }),
   destination: z.object({
-    lat: z.coerce.number(),
-    lng: z.coerce.number(),
+    lat: z.coerce.number().min(-90).max(90),
+    lng: z.coerce.number().min(-180).max(180),
     address: z.string().optional(),
   }),
   weight_tons: z.coerce.number().positive().max(50),
