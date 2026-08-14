@@ -87,7 +87,7 @@ content.addChild(chart1);
 content.addChild(chart2);
 
 // Initial layout
-layoutEngine.processLayout();
+layoutEngine.scheduleLayout();
 
 // ============ Routes ============
 
@@ -161,7 +161,7 @@ router.post('/layout/node/:nodeId/position', (req, res) => {
         node.position.y = y;
         node.markDirty({ position: true });
         
-        layoutEngine.processLayout();
+        layoutEngine.scheduleLayout();
         
         res.json({
             success: true,
@@ -192,7 +192,7 @@ router.post('/layout/node/:nodeId/size', (req, res) => {
         node.size.height = height;
         node.markDirty({ size: true });
         
-        layoutEngine.processLayout();
+        layoutEngine.scheduleLayout();
         
         res.json({
             success: true,
@@ -228,7 +228,7 @@ router.post('/layout/node/:parentId/child', (req, res) => {
         });
         
         parent.addChild(child);
-        layoutEngine.processLayout();
+        layoutEngine.scheduleLayout();
         
         res.json({
             success: true,
@@ -255,7 +255,7 @@ router.delete('/layout/node/:parentId/child/:childId', (req, res) => {
         }
         
         parent.removeChild(childId);
-        layoutEngine.processLayout();
+        layoutEngine.scheduleLayout();
         
         res.json({
             success: true,
@@ -299,7 +299,7 @@ router.post('/layout/batch-update', (req, res) => {
 router.post('/layout/reflow', (req, res) => {
     try {
         root.invalidateBranch();
-        layoutEngine.processLayout();
+        layoutEngine.scheduleLayout();
         
         res.json({
             success: true,
