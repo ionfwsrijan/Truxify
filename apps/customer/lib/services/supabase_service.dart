@@ -26,6 +26,22 @@ class SupabaseService {
     return id;
   }
 
+  /// Returns the current user's `profiles.id` (the id owner columns store),
+  /// throwing if not authenticated or the profile cannot be resolved.
+  static Future<String> requireProfileId() async {
+    final uid = requireUserId();
+    final row = await client
+        .from('profiles')
+        .select('id')
+        .eq('firebase_uid', uid)
+        .maybeSingle();
+    final profileId = row?['id']?.toString();
+    if (profileId == null || profileId.isEmpty) {
+      throw StateError('No profile for authenticated user.');
+    }
+    return profileId;
+  }
+
   static Future<AuthResponse> signUp({
     required String email,
     required String password,

@@ -8,7 +8,7 @@ class AddressRepository {
 
   /// Fetch all addresses for the logged-in user, default first.
   Future<List<SavedAddress>> fetchAll() async {
-    final userId = SupabaseService.requireUserId();
+    final userId = await SupabaseService.requireProfileId();
     final rows = await SupabaseService.client
         .from(_table)
         .select()
@@ -21,7 +21,7 @@ class AddressRepository {
 
   /// Insert a new address. If it's marked default, demote all others first.
   Future<SavedAddress> add(SavedAddress address) async {
-    final userId = SupabaseService.requireUserId();
+    final userId = await SupabaseService.requireProfileId();
     final payload = address.toMap()..['user_id'] = userId;
 
     final row = await SupabaseService.client
@@ -41,7 +41,7 @@ class AddressRepository {
   /// Clear-and-set runs atomically via the `set_default_address` RPC so a
   /// failure partway through never leaves the user with no default address.
   Future<void> setDefault(String addressId) async {
-    final userId = SupabaseService.requireUserId();
+    final userId = await SupabaseService.requireProfileId();
     try {
       await SupabaseService.client.rpc(
         'set_default_address',
@@ -60,7 +60,7 @@ class AddressRepository {
 
   /// Delete an address by ID.
   Future<void> delete(String addressId) async {
-    final userId = SupabaseService.requireUserId();
+    final userId = await SupabaseService.requireProfileId();
     await SupabaseService.client
         .from(_table)
         .delete()

@@ -14,12 +14,20 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  v_exists BOOLEAN;
+  v_user_id UUID;
+  v_exists  BOOLEAN;
 BEGIN
   -- Verify the caller IS the user whose addresses are being modified.
-  -- auth.uid() is NULL for unauthenticated calls, and NULL <> x is NULL
-  -- (not TRUE), so this must be a null-safe check to actually block them.
-  IF auth.uid() IS NULL OR auth.uid() <> p_user_id THEN
+  -- get_profile_id() maps the Firebase JWT sub to profiles.id, which is what
+  -- saved_addresses.user_id stores (auth.uid() is the Firebase UID and would
+  -- never match). Null-safe: an unauthenticated caller (auth.uid() IS NULL)
+  -- must also be rejected, not just skipped.
+  v_user_id := get_profile_id();
+  IF auth.uid() IS NULL OR v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized: you can only modify your own addresses';
+  END IF;
+
+  IF p_user_id IS NOT NULL AND p_user_id <> v_user_id THEN
     RAISE EXCEPTION 'Unauthorized: you can only modify your own addresses';
   END IF;
 
@@ -28,7 +36,7 @@ BEGIN
   SELECT EXISTS(
     SELECT 1 FROM saved_addresses
     WHERE id = p_address_id
-      AND user_id = p_user_id
+      AND user_id = v_user_id
     FOR UPDATE
   ) INTO v_exists;
 
@@ -38,13 +46,13 @@ BEGIN
 
   UPDATE saved_addresses
     SET is_default = false
-    WHERE user_id = p_user_id
+    WHERE user_id = v_user_id
       AND id <> p_address_id;
 
   UPDATE saved_addresses
     SET is_default = true
     WHERE id = p_address_id
-      AND user_id = p_user_id;
+      AND user_id = v_user_id;
 END;
 $$;
 
