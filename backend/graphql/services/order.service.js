@@ -2,7 +2,7 @@ import { ApolloServer } from '@apollo/server';
 import { startStandaloneServer } from '@apollo/server/standalone';
 import { buildSubgraphSchema } from '@apollo/federation';
 import { gql } from 'graphql-tag';
-import { supabase } from '../../api/src/config/db.js';
+import { supabase, createUserClient } from '../../api/src/config/db.js';
 import logger from '../../api/src/middleware/logger.js';
 import { generateOrderDisplayId } from '../../api/src/lib/orderDisplayId.js';
 import { createLoaders } from '../gateway/authContext.js';
@@ -149,11 +149,11 @@ const typeDefs = gql`
 
 const resolvers = {
     Query: {
-        order: async (_, { id }, { user }) => {
+        order: async (_, { id }, { user, supabaseClient }) => {
             const currentUser = requireUser(user);
 
             // Fetch order from database
-            let query = supabase
+            let query = supabaseClient
                 .from('orders')
                 .select('*')
                 .eq('id', id);
@@ -167,10 +167,10 @@ const resolvers = {
             if (error) throw error;
             return mapOrder(data);
         },
-        orders: async (_, { status, limit = 10, offset = 0 }, { user }) => {
+        orders: async (_, { status, limit = 10, offset = 0 }, { user, supabaseClient }) => {
             const currentUser = requireUser(user);
 
-            let query = supabase
+            let query = supabaseClient
                 .from('orders')
                 .select('*')
                 .range(offset, offset + limit - 1);
@@ -187,11 +187,11 @@ const resolvers = {
             if (error) throw error;
             return data.map(mapOrder);
         },
-        ordersByCustomer: async (_, { customerId }, { user }) => {
+        ordersByCustomer: async (_, { customerId }, { user, supabaseClient }) => {
             const currentUser = requireUser(user);
             const scopedCustomerId = isAdmin(currentUser) ? customerId : currentUser.id;
 
-            const { data, error } = await supabase
+            const { data, error } = await supabaseClient
                 .from('orders')
                 .select('*')
                 .eq('customer_id', scopedCustomerId)
@@ -202,11 +202,11 @@ const resolvers = {
         }
     },
     Mutation: {
-        createOrder: async (_, { input }, { user }) => {
+        createOrder: async (_, { input }, { user, supabaseClient }) => {
             const currentUser = requireUser(user);
             const customerId = isAdmin(currentUser) ? input.customerId : currentUser.id;
 
-            const { data, error } = await supabase
+            const { data, error } = await supabaseClient
                 .from('orders')
                 .insert([{
                     customer_id: customerId,
@@ -230,7 +230,7 @@ const resolvers = {
             if (error) throw error;
             return mapOrder(data);
         },
-        updateOrder: async (_, { id, input }, { user }) => {
+        updateOrder: async (_, { id, input }, { user, supabaseClient }) => {
             const currentUser = requireUser(user);
             const updates = {
                 status: toDbStatus(input.status),
@@ -247,7 +247,7 @@ const resolvers = {
                 updates.driver_id = input.driverId || undefined;
             }
 
-            let query = supabase
+            let query = supabaseClient
                 .from('orders')
                 .update(updates)
                 .eq('id', id);
@@ -261,9 +261,9 @@ const resolvers = {
             if (error) throw error;
             return mapOrder(data);
         },
-        cancelOrder: async (_, { id, reason }, { user }) => {
+        cancelOrder: async (_, { id, reason }, { user, supabaseClient }) => {
             const currentUser = requireUser(user);
-            let query = supabase
+            let query = supabaseClient
                 .from('orders')
                 .update({
                     status: 'cancelled',
@@ -290,7 +290,7 @@ const resolvers = {
         },
         payment: async (order, _, context) => {
             if (!context.loaders) {
-                const { data, error } = await supabase
+                const { data, error } = await context.supabaseClient
                     .from('payments')
                     .select('*')
                     .eq('order_id', order.id)
@@ -303,7 +303,7 @@ const resolvers = {
         },
         trip: async (order, _, context) => {
             if (!context.loaders) {
-                const { data, error } = await supabase
+                const { data, error } = await context.supabaseClient
                     .from('trips')
                     .select('*')
                     .eq('order_id', order.id)
@@ -329,10 +329,15 @@ async function startOrderService() {
             const id = req.headers['x-user-id'];
             const role = req.headers['x-user-role'];
             const user = id ? { id, role } : null;
-            
+
+            const authHeader = req.headers.authorization;
+            const token = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : authHeader;
+            const supabaseClient = token ? createUserClient(token) : supabase;
+
             return {
                 user,
-                loaders: createLoaders(supabase)
+                supabaseClient,
+                loaders: createLoaders(supabaseClient)
             };
         }
     });

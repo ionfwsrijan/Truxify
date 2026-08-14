@@ -2,7 +2,7 @@
 import { startStandaloneServer } from '@apollo/server/standalone';
 import { buildSubgraphSchema } from '@apollo/federation';
 import { gql } from 'graphql-tag';
-import { supabase } from '../../api/src/config/db.js';
+import { supabase, createUserClient } from '../../api/src/config/db.js';
 import logger from '../../api/src/middleware/logger.js';
 
 const DISPATCH_ROLES = new Set(['ADMIN', 'admin', 'DISPATCHER', 'dispatcher']);
@@ -94,8 +94,8 @@ const typeDefs = gql`
 
 const resolvers = {
     Query: {
-        driver: async (_, { id }) => {
-            const { data, error } = await supabase
+        driver: async (_, { id }, { supabaseClient }) => {
+            const { data, error } = await supabaseClient
                 .from('drivers')
                 .select('*')
                 .eq('id', id)
@@ -104,8 +104,8 @@ const resolvers = {
             if (error) throw error;
             return mapDriver(data);
         },
-        drivers: async (_, { available, location }) => {
-            let query = supabase.from('drivers').select('*');
+        drivers: async (_, { available, location }, { supabaseClient }) => {
+            let query = supabaseClient.from('drivers').select('*');
             
             if (available !== undefined) {
                 query = query.eq('status', available ? 'AVAILABLE' : 'BUSY');
@@ -123,8 +123,8 @@ const resolvers = {
             if (error) throw error;
             return data.map(mapDriver);
         },
-        nearbyDrivers: async (_, { lat, lng, radius = 10 }) => {
-            const { data, error } = await supabase
+        nearbyDrivers: async (_, { lat, lng, radius = 10 }, { supabaseClient }) => {
+            const { data, error } = await supabaseClient
                 .from('drivers')
                 .select('*')
                 .lte('current_location->>lat', lat + radius * 0.01)
@@ -138,9 +138,9 @@ const resolvers = {
         }
     },
     Mutation: {
-        updateDriver: async (_, { id, input }, { user }) => {
+        updateDriver: async (_, { id, input }, { user, supabaseClient }) => {
             const currentUser = requireUser(user);
-            let query = supabase
+            let query = supabaseClient
                 .from('drivers')
                 .update({
                     status: input.status,
@@ -160,13 +160,13 @@ const resolvers = {
             if (error) throw error;
             return mapDriver(data);
         },
-        assignDriver: async (_, { orderId, driverId }, { user }) => {
+        assignDriver: async (_, { orderId, driverId }, { user, supabaseClient }) => {
             const currentUser = requireUser(user);
             if (!canDispatch(currentUser)) {
                 throw new Error('Dispatcher role required');
             }
 
-            const { data, error } = await supabase
+            const { data, error } = await supabaseClient
                 .from('orders')
                 .update({
                     driver_id: driverId,
@@ -180,9 +180,9 @@ const resolvers = {
             if (error) throw error;
             return data;
         },
-        updateDriverLocation: async (_, { id, location }, { user }) => {
+        updateDriverLocation: async (_, { id, location }, { user, supabaseClient }) => {
             const currentUser = requireUser(user);
-            let query = supabase
+            let query = supabaseClient
                 .from('drivers')
                 .update({
                     current_location: location,
@@ -209,7 +209,18 @@ async function startDriverService() {
     });
 
     const { url } = await startStandaloneServer(server, {
-        listen: { port: 4002 }
+        listen: { port: 4002 },
+        context: async ({ req }) => {
+            const id = req.headers['x-user-id'];
+            const role = req.headers['x-user-role'];
+            const user = id ? { id, role } : null;
+
+            const authHeader = req.headers.authorization;
+            const token = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : authHeader;
+            const supabaseClient = token ? createUserClient(token) : supabase;
+
+            return { user, supabaseClient };
+        }
     });
 
     logger.info(`OK Driver GraphQL service running at ${url}`);

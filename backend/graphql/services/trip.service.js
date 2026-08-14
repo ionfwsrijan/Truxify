@@ -3,7 +3,7 @@ import { startStandaloneServer } from '@apollo/server/standalone';
 import { buildSubgraphSchema } from '@apollo/federation';
 import { gql } from 'graphql-tag';
 import DataLoader from 'dataloader';
-import { supabase } from '../../api/src/config/db.js';
+import { supabase, createUserClient } from '../../api/src/config/db.js';
 import logger from '../../api/src/middleware/logger.js';
 
 const typeDefs = gql`
@@ -35,8 +35,8 @@ const typeDefs = gql`
 
 const resolvers = {
     Query: {
-        logisticsRoute: async (_, { id }) => {
-            const { data, error } = await supabase.from('trips').select('*').eq('id', id).single();
+        logisticsRoute: async (_, { id }, { supabaseClient }) => {
+            const { data, error } = await supabaseClient.from('trips').select('*').eq('id', id).single();
             if (error) throw error;
             return {
                 ...data,
@@ -46,8 +46,8 @@ const resolvers = {
                 routeLabel: data.route_label,
             };
         },
-        logisticsRoutes: async (_, { limit = 50, offset = 0 }) => {
-            const { data, error } = await supabase.from('trips').select('*').range(offset, offset + limit - 1);
+        logisticsRoutes: async (_, { limit = 50, offset = 0 }, { supabaseClient }) => {
+            const { data, error } = await supabaseClient.from('trips').select('*').range(offset, offset + limit - 1);
             if (error) throw error;
             return data.map(row => ({
                 ...row,
@@ -67,8 +67,8 @@ const resolvers = {
 };
 
 // Batch function for DataLoader
-const batchCheckpoints = async (tripDisplayIds) => {
-    const { data, error } = await supabase
+const batchCheckpoints = async (supabaseClient, tripDisplayIds) => {
+    const { data, error } = await supabaseClient
         .from('route_map_points')
         .select('*')
         .in('trip_display_id', tripDisplayIds);
@@ -107,9 +107,19 @@ async function startLogisticsService() {
 
     const { url } = await startStandaloneServer(server, {
         listen: { port: 4004 },
-        context: async () => {
+        context: async ({ req }) => {
+            const id = req.headers['x-user-id'];
+            const role = req.headers['x-user-role'];
+            const user = id ? { id, role } : null;
+
+            const authHeader = req.headers.authorization;
+            const token = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : authHeader;
+            const supabaseClient = token ? createUserClient(token) : supabase;
+
             return {
-                checkpointLoader: new DataLoader(keys => batchCheckpoints(keys))
+                user,
+                supabaseClient,
+                checkpointLoader: new DataLoader(keys => batchCheckpoints(supabaseClient, keys))
             };
         }
     });
