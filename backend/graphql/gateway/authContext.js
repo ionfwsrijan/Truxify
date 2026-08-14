@@ -60,7 +60,7 @@ export async function resolveUserContext(supabaseClient, token) {
   const { data: profile } = await supabaseClient
     .from('profiles')
     .select('role')
-    .eq('id', user.id)
+    .eq('firebase_uid', user.id)
     .maybeSingle();
 
   return { id: user.id, role: profile?.role || DEFAULT_ROLE };
