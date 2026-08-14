@@ -17,14 +17,12 @@ spec:
       labels:
         app: truxify
         component: ml
+      annotations:
+        sidecar.istio.io/rewriteAppHTTPProbers: "true"
     spec:
       containers:
       - name: ml-engine
-<<<<<<< HEAD
-        image: truxify/ml:1.0.0
-=======
         image: ghcr.io/kanishjebamathewm/truxify-ml:1.0.0
->>>>>>> upstream/main
         imagePullPolicy: Always
         ports:
         - containerPort: 8000

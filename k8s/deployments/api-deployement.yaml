@@ -17,6 +17,8 @@ spec:
       labels:
         app: truxify
         component: api
+      annotations:
+        sidecar.istio.io/rewriteAppHTTPProbers: "true"
     spec:
       serviceAccountName: api-service-account
       containers:
