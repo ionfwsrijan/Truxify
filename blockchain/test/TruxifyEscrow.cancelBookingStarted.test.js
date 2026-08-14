@@ -67,12 +67,20 @@ describe("TruxifyEscrow #8891 — cancelBooking started-trip guard", function ()
     expect(await escrow.pendingWithdrawals(customer.address)).to.equal(amount);
   });
 
-  it("cancelWithPenalty also rejects a started trip (consistent guard)", async function () {
-    const { escrow, owner } = await loadFixture(deployWithBookingFixture);
+  it("cancelWithPenalty compensates the driver and refunds the rest for a started trip", async function () {
+    const { escrow, owner, customer, driver, amount } = await loadFixture(deployWithBookingFixture);
+    const driverFee = ethers.parseEther("0.3");
 
     await escrow.connect(owner).markBookingStarted(1n);
 
-    await expect(escrow.connect(owner).cancelWithPenalty(1n, ethers.parseEther("0.3"))).to.be
-      .revertedWith("TruxifyEscrow: Trip already started");
+    await expect(escrow.connect(owner).cancelWithPenalty(1n, driverFee))
+      .to.emit(escrow, "CancellationPenaltyApplied")
+      .withArgs(1n, driver.address, driverFee, customer.address, amount - driverFee);
+
+    const booking = await escrow.getBooking(1n);
+    expect(booking.status).to.equal(2); // Cancelled
+    expect(booking.paid).to.be.true;
+    expect(await escrow.pendingWithdrawals(driver.address)).to.equal(driverFee);
+    expect(await escrow.pendingWithdrawals(customer.address)).to.equal(amount - driverFee);
   });
 });
