@@ -400,7 +400,8 @@ router.put('/online', authenticate, userLimiter, requirePolicy('driver:toggle-on
   const { is_online } = req.body;
 
   try {
-    const { data: details, error } = await supabase
+    const userClient = createUserClient(req.token);
+    const { data: details, error } = await userClient
       .from('driver_details')
       .update({ is_online, updated_at: new Date().toISOString() })
       .eq('user_id', req.user.id)
@@ -1138,7 +1139,8 @@ router.post('/wallet/withdraw', authenticate, userLimiter, requirePolicy('driver
     }
 
     // 5.1 Fetch driver confirmed balance
-    const { data: details, error: detailsErr } = await supabase
+    const userClient = createUserClient(req.token);
+    const { data: details, error: detailsErr } = await userClient
       .from('driver_details')
       .select('wallet_confirmed')
       .eq('user_id', req.user.id)
@@ -1160,7 +1162,6 @@ router.post('/wallet/withdraw', authenticate, userLimiter, requirePolicy('driver
     }
 
     // 5.2 Execute atomically via Supabase RPC
-    const userClient = createUserClient(req.token);
     const { error: rpcErr } = await userClient.rpc('withdraw_funds_tx', {
       p_driver_id: req.user.id,
       p_amount:    amount
@@ -1624,7 +1625,8 @@ router.post('/weigh-stations/sync-weight', validateBody(syncWeightSchema), authe
     const { truck_id, axles } = req.body;
 
     // Optional: verify the truck belongs to the driver
-    const { data: truck, error: truckErr } = await supabase
+    const userClient = createUserClient(req.token);
+    const { data: truck, error: truckErr } = await userClient
       .from('trucks')
       .select('id')
       .eq('id', truck_id)
@@ -1908,7 +1910,8 @@ router.patch('/availability', authenticate, userLimiter, async (req, res) => {
       return res.status(400).json({ error: 'available field must be a boolean.' });
     }
 
-    const { data: details, error } = await supabase
+    const userClient = createUserClient(req.token);
+    const { data: details, error } = await userClient
       .from('driver_details')
       .update({ is_online: available, updated_at: new Date().toISOString() })
       .eq('user_id', req.user.id)
