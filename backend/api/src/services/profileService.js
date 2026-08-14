@@ -12,9 +12,9 @@ function isCacheEnabled() {
   return process.env.CACHE_ENABLED !== 'false';
 }
 
-export async function getProfile(userId) {
+export async function getProfile(userId, client = supabase) {
   return measureExecution('ProfileService.getProfile', async () => {
-  if (!supabase) {
+  if (!client) {
     throw new Error('Supabase client not configured — check SUPABASE_URL and SUPABASE_ANON_KEY');
   }
 
@@ -30,7 +30,7 @@ export async function getProfile(userId) {
     }
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from('profiles')
     .select('*')
     .eq('id', userId)

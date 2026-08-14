@@ -111,6 +111,8 @@ import { auditLog } from '../middleware/auditLog.js';
 
 const router = express.Router();
 
+const userDb = (req) => createUserClient(req.token);
+
 function sanitizeNumberPlate(plate) {
   if (!plate || typeof plate !== 'string') return '';
   return plate.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -151,7 +153,7 @@ router.get('/', authenticate, userLimiter, async (req, res) => {
     const role = req.user.role;
 
     // 1. base profile
-    const profile = await getProfile(userId);
+    const profile = await getProfile(userId, userDb(req));
     if (!profile) {
       return res.status(404).json({ error: 'Profile not found' });
     }
