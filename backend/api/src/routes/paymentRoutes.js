@@ -229,7 +229,7 @@ router.post(
       try {
         order = await orderValidationService.findOrderByIdOrDisplayId(
           order_id,
-          'id, order_display_id, customer_id, driver_id, total_amount, escrow_status, escrow_booking_id, wallet_address, escrow_driver_wallet, escrow_amount_wei, pending_bid_acceptance'
+          'id, order_display_id, customer_id, driver_id, total_amount, escrow_status, escrow_booking_id, escrow_driver_wallet, escrow_amount_wei, pending_bid_acceptance'
         );
       } catch (err) {
         return res.status(500).json({ error: 'Failed to fetch order.' });
