@@ -212,7 +212,7 @@ const hosStatusSchema = z.object({
  *       502:
  *         description: Supabase query failed
  */
-router.get('/active', requireApiKey, userLimiter, async (req, res) => {
+router.get('/active', requireApiKey, async (req, res) => {
   try {
     const client = supabaseAdmin || supabase;
     if (!client) {
@@ -330,7 +330,7 @@ function hasValidCoordinates(lat, lng) {
  *       404:
  *         description: Driver profile not initialized
  */
-router.get('/stats', authenticate, userLimiter, requirePolicy('driver:view-stats'), async (req, res) => {
+router.get('/stats', authenticate, requirePolicy('driver:view-stats'), async (req, res) => {
   try {
     const { data: details, error } = await supabase
       .from('driver_details')
@@ -396,7 +396,7 @@ router.get('/stats', authenticate, userLimiter, requirePolicy('driver:view-stats
  *       400:
  *         description: Validation error
  */
-router.put('/online', authenticate, userLimiter, requirePolicy('driver:toggle-online'), validateBody(driverOnlineSchema), async (req, res) => {
+router.put('/online', authenticate, requirePolicy('driver:toggle-online'), validateBody(driverOnlineSchema), async (req, res) => {
   const { is_online } = req.body;
 
   try {
@@ -428,7 +428,7 @@ router.put('/online', authenticate, userLimiter, requirePolicy('driver:toggle-on
 // ============================================================================
 // 2b. UPDATE HOURS-OF-SERVICE STATUS (DRIVER)
 // ============================================================================
-router.put('/hos/status', authenticate, userLimiter, requirePolicy('driver:update-hos'), validateBody(hosStatusSchema), async (req, res) => {
+router.put('/hos/status', authenticate, requirePolicy('driver:update-hos'), validateBody(hosStatusSchema), async (req, res) => {
   const { status } = req.body;
 
   try {
@@ -498,7 +498,7 @@ router.put('/hos/status', authenticate, userLimiter, requirePolicy('driver:updat
  *       400:
  *         description: Invalid pagination parameters
  */
-router.get('/wallet/history', authenticate, userLimiter, requirePolicy('driver:view-wallet'), async (req, res) => {
+router.get('/wallet/history', authenticate, requirePolicy('driver:view-wallet'), async (req, res) => {
   try {
     const page = parseIntegerQuery(req.query.page) ?? 1;
     const limit = parseIntegerQuery(req.query.limit) ?? 20;
@@ -597,7 +597,7 @@ router.get('/wallet/history', authenticate, userLimiter, requirePolicy('driver:v
  *       400:
  *         description: Invalid days parameter
  */
-router.get('/earnings/summary', authenticate, userLimiter, requirePolicy('driver:view-earnings'), async (req, res) => {
+router.get('/earnings/summary', authenticate, requirePolicy('driver:view-earnings'), async (req, res) => {
   const { start_date: startDate, end_date: endDate } = req.query;
 
   try {
@@ -702,7 +702,7 @@ router.get('/earnings/summary', authenticate, userLimiter, requirePolicy('driver
  *             schema:
  *               $ref: '#/components/schemas/DriverTripsResponse'
  */
-router.get('/trips', authenticate, userLimiter, requirePolicy('driver:view-trips'), async (req, res) => {
+router.get('/trips', authenticate, requirePolicy('driver:view-trips'), async (req, res) => {
   const { status } = req.query;
   const rawPage = req.query.page;
   const rawLimit = req.query.limit;
@@ -809,7 +809,7 @@ router.get('/trips', authenticate, userLimiter, requirePolicy('driver:view-trips
  *       404:
  *         description: Trip not found or Access denied
  */
-router.get('/trips/:tripDisplayId', authenticate, userLimiter, requirePolicy('driver:view-trips'), async (req, res) => {
+router.get('/trips/:tripDisplayId', authenticate, requirePolicy('driver:view-trips'), async (req, res) => {
   const { tripDisplayId } = req.params;
 
   try {
@@ -865,7 +865,7 @@ router.get('/trips/:tripDisplayId', authenticate, userLimiter, requirePolicy('dr
  *       403:
  *         description: Access denied
  */
-router.get('/trips/:tripDisplayId/items', authenticate, userLimiter, requirePolicy('driver:view-trip-items'), async (req, res) => {
+router.get('/trips/:tripDisplayId/items', authenticate, requirePolicy('driver:view-trip-items'), async (req, res) => {
   const { tripDisplayId } = req.params;
 
   try {
@@ -908,7 +908,7 @@ router.get('/trips/:tripDisplayId/items', authenticate, userLimiter, requirePoli
  *       403:
  *         description: Access denied
  */
-router.get('/trips/:tripDisplayId/stops', authenticate, userLimiter, requirePolicy('driver:view-trip-stops'), async (req, res) => {
+router.get('/trips/:tripDisplayId/stops', authenticate, requirePolicy('driver:view-trip-stops'), async (req, res) => {
   const { tripDisplayId } = req.params;
 
   try {
@@ -951,7 +951,7 @@ router.get('/trips/:tripDisplayId/stops', authenticate, userLimiter, requirePoli
  *       403:
  *         description: Access denied
  */
-router.get('/trips/:tripDisplayId/route-points', authenticate, userLimiter, requirePolicy('driver:view-route-points'), async (req, res) => {
+router.get('/trips/:tripDisplayId/route-points', authenticate, requirePolicy('driver:view-route-points'), async (req, res) => {
   const { tripDisplayId } = req.params;
 
   try {
@@ -975,7 +975,6 @@ router.get('/trips/:tripDisplayId/route-points', authenticate, userLimiter, requ
 router.patch(
   '/route-points/:id/claim',
   authenticate,
-  userLimiter,
   requirePolicy('driver:claim-route-point'),
   validateParams(paramIdSchema),
   async (req, res) => {
@@ -1062,7 +1061,7 @@ router.patch(
  *             schema:
  *               $ref: '#/components/schemas/BidListResponse'
  */
-router.get('/bids', authenticate, userLimiter, requirePolicy('driver:view-bids'), async (req, res) => {
+router.get('/bids', authenticate, requirePolicy('driver:view-bids'), async (req, res) => {
   try {
     const pageParam = req.query.page ?? '1';
     const limitParam = req.query.limit ?? '10';
@@ -1129,7 +1128,7 @@ router.get('/bids', authenticate, userLimiter, requirePolicy('driver:view-bids')
  *       400:
  *         description: Insufficient balance or validation error
  */
-router.post('/wallet/withdraw', authenticate, userLimiter, requirePolicy('driver:withdraw'), auditLog({ action: 'driver:withdraw', resourceType: 'wallet_withdrawal' }), requireIdempotency(86400), validateBody(withdrawSchema), async (req, res) => {
+router.post('/wallet/withdraw', authenticate, requirePolicy('driver:withdraw'), auditLog({ action: 'driver:withdraw', resourceType: 'wallet_withdrawal' }), requireIdempotency(86400), validateBody(withdrawSchema), async (req, res) => {
   const { amount } = req.body; // in paisa
 
   try {
@@ -1268,7 +1267,7 @@ router.post(
  *       404:
  *         description: Driver not found
  */
-router.get('/:driverId/reputation', authenticate, userLimiter, requirePolicy('driver:view-reputation'), validateParams(driverIdParamSchema), async (req, res) => {
+router.get('/:driverId/reputation', authenticate, requirePolicy('driver:view-reputation'), validateParams(driverIdParamSchema), async (req, res) => {
   const { driverId } = req.params;
 
   if (driverId !== req.user.id) {
@@ -1507,7 +1506,7 @@ async function handleDriverEarningsAndStatement(req, res, filename, errorLabel) 
  *       500:
  *         description: Internal Server Error
  */
-router.get('/statement', authenticate, requirePolicy('profile:view-statement'), userLimiter, validateQuery(driverStatementSchema), async (req, res) => {
+router.get('/statement', authenticate, requirePolicy('profile:view-statement'), validateQuery(driverStatementSchema), async (req, res) => {
   await handleDriverEarningsAndStatement(req, res, 'statement.csv', '[DriverRoutes] Driver statement fetch error');
 });
 
@@ -1554,7 +1553,7 @@ router.get('/statement', authenticate, requirePolicy('profile:view-statement'), 
  *       500:
  *         description: Internal Server Error
  */
-router.get('/earnings/report', authenticate, requirePolicy('driver:view-earnings'), userLimiter, validateQuery(driverStatementSchema), async (req, res) => {
+router.get('/earnings/report', authenticate, requirePolicy('driver:view-earnings'), validateQuery(driverStatementSchema), async (req, res) => {
   await handleDriverEarningsAndStatement(req, res, 'earnings_report.csv', '[DriverRoutes] Driver earnings report fetch error');
 });
 
@@ -1620,7 +1619,7 @@ router.get('/weigh-stations/bypass-status', authenticate, requireDriverRole, asy
  *       400:
  *         description: Invalid payload
  */
-router.post('/weigh-stations/sync-weight', validateBody(syncWeightSchema), authenticate, requirePolicy('driver:view-stats'), userLimiter, async (req, res) => {
+router.post('/weigh-stations/sync-weight', validateBody(syncWeightSchema), authenticate, requirePolicy('driver:view-stats'), async (req, res) => {
   try {
     const driverId = req.user.id;
     const { truck_id, axles } = req.body;
@@ -1672,7 +1671,7 @@ router.post('/weigh-stations/sync-weight', validateBody(syncWeightSchema), authe
  *       200:
  *         description: Optimized route tasks
  */
-router.get('/ltl/optimize-route', authenticate, userLimiter, requireDriverRole, async (req, res) => {
+router.get('/ltl/optimize-route', authenticate, requireDriverRole, async (req, res) => {
   try {
     const lat = parseCoordinate(req.query.lat);
     const lng = parseCoordinate(req.query.lng);
@@ -1729,7 +1728,7 @@ router.get('/ltl/optimize-route', authenticate, userLimiter, requireDriverRole, 
 // ============================================================================
 // GET DRIVER ANALYTICS & EARNINGS
 // ============================================================================
-router.get('/:id/earnings', authenticate, userLimiter, requirePolicy('driver:view-earnings'), validateParams(paramIdSchema), async (req, res) => {
+router.get('/:id/earnings', authenticate, requirePolicy('driver:view-earnings'), validateParams(paramIdSchema), async (req, res) => {
   const { id } = req.params;
   const period = req.query.period || 'week';
 
@@ -1831,7 +1830,7 @@ router.get('/:id/earnings', authenticate, userLimiter, requirePolicy('driver:vie
 // Driver Profile & Availability & Truck endpoints
 // ============================================================================
 
-router.get('/profile', authenticate, userLimiter, async (req, res) => {
+router.get('/profile', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
 
@@ -1903,7 +1902,7 @@ router.get('/profile', authenticate, userLimiter, async (req, res) => {
   }
 });
 
-router.patch('/availability', authenticate, userLimiter, async (req, res) => {
+router.patch('/availability', authenticate, async (req, res) => {
   try {
     const { available } = req.body;
     if (typeof available !== 'boolean') {
@@ -1931,7 +1930,7 @@ router.patch('/availability', authenticate, userLimiter, async (req, res) => {
   }
 });
 
-router.put('/truck', authenticate, userLimiter, requireDriverRole, async (req, res) => {
+router.put('/truck', authenticate, requireDriverRole, async (req, res) => {
   try {
     const { type, capacityWeight, capacityVolume, registrationNumber } = req.body;
 
