@@ -94,19 +94,30 @@ const typeDefs = gql`
 
 const resolvers = {
     Query: {
-        driver: async (_, { id }) => {
-            const { data, error } = await supabase
+        driver: async (_, { id }, { user }) => {
+            const currentUser = requireUser(user);
+            let query = supabase
                 .from('drivers')
                 .select('*')
-                .eq('id', id)
-                .single();
+                .eq('id', id);
+
+            if (!canDispatch(currentUser)) {
+                query = query.eq('user_id', currentUser.id);
+            }
+
+            const { data, error } = await query.single();
             
             if (error) throw error;
             return mapDriver(data);
         },
-        drivers: async (_, { available, location }) => {
+        drivers: async (_, { available, location }, { user }) => {
+            const currentUser = requireUser(user);
             let query = supabase.from('drivers').select('*');
-            
+
+            if (!canDispatch(currentUser)) {
+                query = query.eq('user_id', currentUser.id);
+            }
+
             if (available !== undefined) {
                 query = query.eq('status', available ? 'AVAILABLE' : 'BUSY');
             }
@@ -123,8 +134,9 @@ const resolvers = {
             if (error) throw error;
             return data.map(mapDriver);
         },
-        nearbyDrivers: async (_, { lat, lng, radius = 10 }) => {
-            const { data, error } = await supabase
+        nearbyDrivers: async (_, { lat, lng, radius = 10 }, { user }) => {
+            const currentUser = requireUser(user);
+            let query = supabase
                 .from('drivers')
                 .select('*')
                 .lte('current_location->>lat', lat + radius * 0.01)
@@ -132,7 +144,12 @@ const resolvers = {
                 .lte('current_location->>lng', lng + radius * 0.01)
                 .gte('current_location->>lng', lng - radius * 0.01)
                 .eq('status', 'AVAILABLE');
-            
+
+            if (!canDispatch(currentUser)) {
+                query = query.eq('user_id', currentUser.id);
+            }
+
+            const { data, error } = await query;
             if (error) throw error;
             return data.map(mapDriver);
         }
@@ -209,7 +226,14 @@ async function startDriverService() {
     });
 
     const { url } = await startStandaloneServer(server, {
-        listen: { port: 4002 }
+        listen: { port: 4002 },
+        context: async ({ req }) => {
+            const id = req.headers['x-user-id'];
+            const role = req.headers['x-user-role'];
+            const user = id ? { id, role } : null;
+
+            return { user };
+        }
     });
 
     logger.info(`OK Driver GraphQL service running at ${url}`);
