@@ -1,14 +1,24 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../../src/config/db.js', () => ({}));
 
 describe('VoiceAiService', () => {
   let VoiceAiService;
+  const originalOpenAiKey = process.env.OPENAI_API_KEY;
 
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.resetModules();
+    process.env.OPENAI_API_KEY = 'test-key';
     VoiceAiService = (await import('../../src/services/voice/VoiceAiService.js')).default;
+  });
+
+  afterEach(() => {
+    if (originalOpenAiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = originalOpenAiKey;
+    }
   });
 
   describe('processVoiceCommand', () => {
