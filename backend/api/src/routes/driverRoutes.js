@@ -332,7 +332,8 @@ function hasValidCoordinates(lat, lng) {
  */
 router.get('/stats', authenticate, userLimiter, requirePolicy('driver:view-stats'), async (req, res) => {
   try {
-    const { data: details, error } = await supabase
+    const userClient = createUserClient(req.token);
+    const { data: details, error } = await userClient
       .from('driver_details')
       .select('rating, total_trips, completion_rate, is_online, wallet_confirmed, wallet_pending, wallet_total, truck_id')
       .eq('user_id', req.user.id)
@@ -349,7 +350,7 @@ router.get('/stats', authenticate, userLimiter, requirePolicy('driver:view-stats
     // Fetch truck details if assigned
     let truck = null;
     if (details.truck_id) {
-      const { data: truckData } = await supabase
+      const { data: truckData } = await userClient
         .from('trucks')
         .select('*')
         .eq('id', details.truck_id)
@@ -500,6 +501,7 @@ router.put('/hos/status', authenticate, userLimiter, requirePolicy('driver:updat
  */
 router.get('/wallet/history', authenticate, userLimiter, requirePolicy('driver:view-wallet'), async (req, res) => {
   try {
+    const userClient = createUserClient(req.token);
     const page = parseIntegerQuery(req.query.page) ?? 1;
     const limit = parseIntegerQuery(req.query.limit) ?? 20;
 
@@ -523,7 +525,7 @@ router.get('/wallet/history', authenticate, userLimiter, requirePolicy('driver:v
       data: transactions,
       error,
       count
-    } = await supabase
+    } = await userClient
       .from('wallet_transactions')
       .select('*', { count: 'exact' })
       .eq('driver_id', req.user.id)
@@ -1062,6 +1064,7 @@ router.patch(
  */
 router.get('/bids', authenticate, userLimiter, requirePolicy('driver:view-bids'), async (req, res) => {
   try {
+    const userClient = createUserClient(req.token);
     const pageParam = req.query.page ?? '1';
     const limitParam = req.query.limit ?? '10';
     const page = typeof pageParam === 'string' ? Number(pageParam) : NaN;
@@ -1078,7 +1081,7 @@ router.get('/bids', authenticate, userLimiter, requirePolicy('driver:view-bids')
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    const { data: bids, error, count } = await supabase
+    const { data: bids, error, count } = await userClient
       .from('load_bids')
       .select('*', { count: 'exact' })
       .eq('driver_id', req.user.id)
@@ -1275,6 +1278,8 @@ router.get('/:driverId/reputation', authenticate, userLimiter, requirePolicy('dr
 
   try {
 
+    const userClient = createUserClient(req.token);
+
     // Check cache in Redis first if client exists
     if (redisClient) {
       try {
@@ -1289,7 +1294,7 @@ router.get('/:driverId/reputation', authenticate, userLimiter, requirePolicy('dr
     }
 
     // Fetch details from Supabase
-    const { data: details, error } = await supabase
+    const { data: details, error } = await userClient
       .from('driver_details')
       .select('rating, polygon_wallet_address')
       .eq('user_id', driverId)
@@ -1672,6 +1677,7 @@ router.post('/weigh-stations/sync-weight', validateBody(syncWeightSchema), authe
  */
 router.get('/ltl/optimize-route', authenticate, userLimiter, requireDriverRole, async (req, res) => {
   try {
+    const userClient = createUserClient(req.token);
     const lat = parseCoordinate(req.query.lat);
     const lng = parseCoordinate(req.query.lng);
 
@@ -1679,7 +1685,7 @@ router.get('/ltl/optimize-route', authenticate, userLimiter, requireDriverRole, 
       return res.status(400).json({ error: 'Valid lat and lng query parameters are required.' });
     }
 
-    const { data: activeOrders, error } = await supabase
+    const { data: activeOrders, error } = await userClient
       .from('orders')
       .select('id, order_display_id, status, pickup_address, pickup_lat, pickup_lng, drop_address, drop_lat, drop_lng')
       .eq('driver_id', req.user.id)
@@ -1736,6 +1742,7 @@ router.get('/:id/earnings', authenticate, userLimiter, requirePolicy('driver:vie
   }
 
   try {
+    const userClient = createUserClient(req.token);
     const cutoff = getEarningsCutoff(period);
     if (!cutoff) {
       return res.status(400).json({ error: 'Invalid period. Must be day, week, or month.' });
@@ -1749,7 +1756,7 @@ router.get('/:id/earnings', authenticate, userLimiter, requirePolicy('driver:vie
     // None of these three queries depends on another's result, so they run
     // concurrently rather than stacking three round trips of latency.
     const [tripsResult, lifetimeResult, adjacentResult] = await Promise.all([
-      supabase
+      userClient
         .from('trips')
         .select(EARNINGS_TRIP_COLUMNS)
         .eq('driver_id', id)
@@ -1757,12 +1764,12 @@ router.get('/:id/earnings', authenticate, userLimiter, requirePolicy('driver:vie
         .gte('trip_date', toDateKey(cutoff))
         .order('trip_date', { ascending: false })
         .limit(EARNINGS_MAX_ROWS),
-      supabase
+      userClient
         .from('trips')
         .select('*', { count: 'exact', head: true })
         .eq('driver_id', id)
         .eq('status', 'completed'),
-      supabase
+      userClient
         .from('trips')
         .select(DEADHEAD_COLUMNS)
         .eq('driver_id', id)
