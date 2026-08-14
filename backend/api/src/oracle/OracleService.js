@@ -1,4 +1,4 @@
-import { supabase } from '../config/db.js';
+import { supabase, supabaseAdmin } from '../config/db.js';
 import logger from '../middleware/logger.js';
 import { verifyDeliveryOtpHash } from '../services/notificationService.js';
 import { DeliveryVerificationService } from '../services/order/deliveryVerificationService.js';
@@ -17,7 +17,7 @@ const DELIVERY_IN_PROGRESS_STATUSES = new Set([
 class OracleService {
   constructor(deps = {}) {
     this.orderRepository = deps.orderRepository || null;
-    this.supabase = deps.supabase || supabase;
+    this.supabase = deps.supabase || supabaseAdmin;
   }
 
   async confirmDelivery({ orderId, otp, gpsCoordinates }) {

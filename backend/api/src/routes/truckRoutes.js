@@ -80,7 +80,7 @@
  */
 
 import express from 'express';
-import { supabase, supabaseAdmin, mongoDb, redisClient } from '../config/db.js';
+import { supabase, supabaseAdmin, createUserClient, mongoDb, redisClient } from '../config/db.js';
 import { authenticate } from '../middleware/auth.js';
 import { requirePolicy } from '../middleware/requirePolicy.js';
 import { userLimiter } from '../middleware/rateLimiter.js';
@@ -199,8 +199,12 @@ router.post('/', authenticate, requirePolicy('truck:register'), userLimiter, val
   const normalizedNumberPlate = sanitizeNumberPlate(number_plate);
 
   try {
+    // trucks RLS grants anon nothing, so registration runs through the
+    // authenticated per-request client (drivers access own trucks).
+    const client = createUserClient(req.token);
+
     // Check for duplicate number plate
-    const { data: existing, error: checkErr } = await supabase
+    const { data: existing, error: checkErr } = await client
       .from('trucks')
       .select('id')
       .eq('number_plate', normalizedNumberPlate)
@@ -214,7 +218,7 @@ router.post('/', authenticate, requirePolicy('truck:register'), userLimiter, val
       return res.status(409).json({ error: 'A truck with this number plate is already registered.' });
     }
 
-    const { data: truck, error: insertErr } = await supabase
+    const { data: truck, error: insertErr } = await client
       .from('trucks')
       .insert({ name: sanitizeTruckName(name), truck_type, number_plate: normalizedNumberPlate, max_capacity_tons, driver_id: req.user.id })
       .select('id, name, truck_type, number_plate, max_capacity_tons, created_at')
@@ -351,12 +355,16 @@ const MATERIAL_TRUCK_COMPATIBILITY = Object.freeze({
   Furniture: ['Closed Body', 'Container'],
 });
 
-async function canViewTruckNumber(user, truck) {
+async function canViewTruckNumber(req, truck) {
+  const user = req.user;
   if (user.role === 'admin' || truck.driver_id === user.id) {
     return { allowed: true };
   }
 
-  const { data: order, error } = await supabase
+  // The orders ownership lookup is scoped to the caller (customers access own
+  // orders / drivers view assigned orders), so it uses the authenticated
+  // per-request client.
+  const { data: order, error } = await createUserClient(req.token)
     .from('orders')
     .select('id')
     .eq('truck_id', truck.id)
@@ -732,7 +740,11 @@ router.get('/search', authenticate, userLimiter, async (req, res) => {
  */
 router.get('/:id/number', authenticate, userLimiter, validateParams(uuidParamSchema), async (req, res) => {
   try {
-    const { data: truck, error } = await supabase
+    // The truck lookup is cross-user (any truck by id), so RLS on trucks
+    // (drivers access own trucks only) must be bypassed with the service-role
+    // client; access is then enforced by canViewTruckNumber below.
+    const db = supabaseAdmin || supabase;
+    const { data: truck, error } = await db
       .from('trucks')
       .select('id, driver_id, number_plate')
       .eq('id', req.params.id)
@@ -741,7 +753,7 @@ router.get('/:id/number', authenticate, userLimiter, validateParams(uuidParamSch
     if (error) return res.status(500).json({ error: 'Failed to fetch truck number.', details: error.message });
     if (!truck) return res.status(404).json({ error: 'Truck not found.' });
 
-    const access = await canViewTruckNumber(req.user, truck);
+    const access = await canViewTruckNumber(req, truck);
     if (access.error) {
       return res.status(500).json({ error: 'Failed to verify truck access.', details: access.error.message });
     }
@@ -806,7 +818,9 @@ router.get('/:id/fuel-advisor', authenticate, userLimiter, validateParams(uuidPa
 
   // Ensure truck belongs to the caller (if driver) or caller is admin
   if (req.user.role === 'driver') {
-    const { data: truck, error: truckErr } = await supabase
+    // Own-truck ownership check runs through the authenticated client (RLS:
+    // drivers access own trucks).
+    const { data: truck, error: truckErr } = await createUserClient(req.token)
       .from('trucks')
       .select('id')
       .eq('id', truckId)

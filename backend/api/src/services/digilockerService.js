@@ -1,7 +1,7 @@
 import axios from 'axios';
 import crypto from 'crypto';
 import { ethers } from 'ethers';
-import { supabase } from '../config/db.js';
+import { supabase, supabaseAdmin } from '../config/db.js';
 import logger from '../middleware/logger.js';
 
 const DIGILOCKER_TIMEOUT_MS = 10000;
@@ -292,7 +292,10 @@ class DigilockerService {
     for (const doc of documents) {
       const docHash = '0x' + crypto.createHash('sha256').update(doc.data).digest('hex');
 
-      const { data: profile } = await supabase
+      // profiles has no anon RLS policies, so the wallet lookup runs through
+      // the service-role client.
+      const client = supabaseAdmin || supabase;
+      const { data: profile } = await client
         .from('profiles')
         .select('polygon_wallet_address')
         .eq('id', driverId)

@@ -1,5 +1,4 @@
-import { supabaseAdmin } from '../config/db.js';
-import { supabase, supabaseAdmin } from '../config/db.js';
+import { supabase, supabaseAdmin, createUserClient } from '../config/db.js';
 import logger from '../middleware/logger.js';
 import { errorResponse } from '../utils/apiResponse.js';
 import { AppError, UnauthorizedError, ValidationError } from '../utils/errors.js';
@@ -168,13 +167,19 @@ export async function unregisterDeviceToken(req, res, next) {
       });
     }
 
-    const { error: rpcError } = await supabaseAdmin.rpc('unregister_device_token', {
-      p_user_id:   userId,
-      p_fcm_token: fcmToken,
-    });
+    // user_devices/profiles are RLS-protected with no anon grants, so all of
+    // the caller's own-row operations run through the authenticated client.
+    const client = createUserClient(req.token);
 
-    if (rpcError) {
-      logger.error('[DeviceController] Failed to unregister device token from database:', rpcError.message);
+    const { data: deletedRows, error: deleteError } = await client
+      .from('user_devices')
+      .delete()
+      .eq('user_id', userId)
+      .eq('fcm_token', fcmToken)
+      .select('id');
+
+    if (deleteError) {
+      logger.error('[DeviceController] Failed to remove device token from database:', deleteError.message);
       return next(new AppError('Failed to unregister device', 500));
     }
 
@@ -187,7 +192,7 @@ export async function unregisterDeviceToken(req, res, next) {
     }
 
     // Query remaining device tokens for this user to fallback
-    const { data: remainingDevice, error: remainingError } = await supabase
+    const { data: remainingDevice, error: remainingError } = await client
       .from('user_devices')
       .select('fcm_token')
       .eq('user_id', userId)
@@ -200,7 +205,7 @@ export async function unregisterDeviceToken(req, res, next) {
 
     const nextToken = remainingDevice?.fcm_token || null;
 
-    const { error: profileSyncError } = await supabase
+    const { error: profileSyncError } = await client
       .from('profiles')
       .update({
         fcm_token: nextToken,
@@ -230,7 +235,10 @@ export async function unregisterDeviceToken(req, res, next) {
  * Rows are soft-deactivated and preserved, never deleted.
  */
 export async function unregisterAllDeviceTokens(userId) {
-  const { error } = await supabaseAdmin
+  // Internal cleanup helper (no per-request token available) — runs through
+  // the service-role client because user_devices/profiles have no anon grants.
+  const client = supabaseAdmin || supabase;
+  const { error } = await client
     .from('user_devices')
     .update({
       is_active: false,
@@ -243,7 +251,7 @@ export async function unregisterAllDeviceTokens(userId) {
     throw error;
   }
 
-  const { error: profileError } = await supabaseAdmin
+  const { error: profileError } = await client
     .from('profiles')
     .update({
       fcm_token: null,

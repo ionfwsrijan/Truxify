@@ -2,7 +2,7 @@ import { ethers } from 'ethers';
 import crypto from 'crypto';
 import logger from '../../middleware/logger.js';
 import * as Sentry from '@sentry/node';
-import { supabase } from '../../config/db.js';
+import { supabase, supabaseAdmin } from '../../config/db.js';
 import { measureExecution } from '../../core/performanceMetrics.js';
 
 const ESCROW_ABI = [
@@ -258,7 +258,10 @@ class KeyRotationService {
 
   async enforceKeyRotationPolicy(userId, daysSinceLastRotation = 90) {
     try {
-      const wallets = await supabase
+      // profiles has no anon RLS policies, so the wallet lookup runs through
+      // the service-role client.
+      const client = supabaseAdmin || supabase;
+      const wallets = await client
         .from('profiles')
         .select('polygon_wallet_address')
         .eq('id', userId);

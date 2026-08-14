@@ -500,6 +500,7 @@ router.put('/hos/status', authenticate, userLimiter, requirePolicy('driver:updat
  */
 router.get('/wallet/history', authenticate, userLimiter, requirePolicy('driver:view-wallet'), async (req, res) => {
   try {
+    const client = createUserClient(req.token);
     const page = parseIntegerQuery(req.query.page) ?? 1;
     const limit = parseIntegerQuery(req.query.limit) ?? 20;
 
@@ -523,7 +524,7 @@ router.get('/wallet/history', authenticate, userLimiter, requirePolicy('driver:v
       data: transactions,
       error,
       count
-    } = await supabase
+    } = await client
       .from('wallet_transactions')
       .select('*', { count: 'exact' })
       .eq('driver_id', req.user.id)
@@ -718,10 +719,13 @@ router.get('/trips', authenticate, userLimiter, requirePolicy('driver:view-trips
   const limit = Math.min(100, Math.max(1, parsedLimit || 10));
 
   try {
+    // Own-data reads (trips/orders/ratings) run through the authenticated
+    // per-request client — anon has no RLS policies on these tables.
+    const client = createUserClient(req.token);
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    let query = supabase
+    let query = client
       .from('trips')
       .select('*', { count: 'exact' })
       .eq('driver_id', req.user.id);
@@ -744,11 +748,11 @@ router.get('/trips', authenticate, userLimiter, requirePolicy('driver:view-trips
     let ratingsMap = {};
     if (orderDisplayIds.length > 0) {
       const [ordersRes, ratingsRes] = await Promise.all([
-        supabase
+        client
           .from('orders')
           .select('order_display_id, escrow_status')
           .in('order_display_id', orderDisplayIds),
-        supabase
+        client
           .from('ratings')
           .select('order_display_id, stars')
           .in('order_display_id', orderDisplayIds)
@@ -1681,7 +1685,11 @@ router.get('/ltl/optimize-route', authenticate, userLimiter, requireDriverRole, 
       return res.status(400).json({ error: 'Valid lat and lng query parameters are required.' });
     }
 
-    const { data: activeOrders, error } = await supabase
+    // Active orders are read through the authenticated per-request client so
+    // RLS lets the driver see only orders assigned to them.
+    const client = createUserClient(req.token);
+
+    const { data: activeOrders, error } = await client
       .from('orders')
       .select('id, order_display_id, status, pickup_address, pickup_lat, pickup_lng, drop_address, drop_lat, drop_lng')
       .eq('driver_id', req.user.id)
