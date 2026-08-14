@@ -249,7 +249,7 @@ export async function predictEta({
   historicalSpeed,
 }) {
   guardMlApiKey();
-  const url = `${getBaseUrl()}/predict/eta`;
+  const url = `${getBaseUrl()}/eta/predict`;
 
   const payload = {
     route_distance: routeDistance,
