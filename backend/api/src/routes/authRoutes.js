@@ -55,6 +55,7 @@ import { firebaseAdmin, supabase, redisClient } from "../config/db.js";
 import {
   OTP_MAX_FAILED_ATTEMPTS,
   OTP_LOCKOUT_MINUTES,
+  OTP_TTL_MINUTES,
 } from "../services/order/orderNotificationService.js";
 import logger from "../middleware/logger.js";
 
@@ -175,7 +176,7 @@ router.get("/session", authenticate, userLimiter, (req, res) => {
 import crypto from "crypto";
 import { otpSendSchema } from "../validation/requestSchemas.js";
 import { z } from "zod";
-import { verifyOtpHash } from "../lib/otpHashing.js";
+import { hashOtp, verifyOtpHash } from "../lib/otpHashing.js";
 
 
 const AUTH_OTP_IN_MEMORY_MAX = parseInt(process.env.IN_MEMORY_OTP_MAP_MAX_SIZE || "10000", 10);
@@ -254,6 +255,66 @@ const verifyOtpSchema = z.object({
   phone: z.string().min(10).max(20),
   otp: z.string().regex(/^\d{6}$/, "OTP must be 6 digits"),
 }).strict();
+
+/**
+ * @openapi
+ * /api/auth/send-otp:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Send OTP
+ *     description: Generates a 6-digit OTP for a phone number, persists its salted hash to phone_otps with a short expiry, and returns the OTP for delivery to the user.
+ *     responses:
+ *       200:
+ *         description: OTP generated and stored successfully
+ *       400:
+ *         description: Invalid phone number
+ *       429:
+ *         description: Too many requests
+ */
+router.post("/send-otp", otpVerificationLimiter, async (req, res) => {
+  const parsed = otpSendSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      success: false,
+      error: "Validation failed",
+      details: parsed.error.flatten().fieldErrors,
+    });
+  }
+
+  const { phone } = parsed.data;
+
+  try {
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const { hash: otpHash, salt: otpSalt } = hashOtp(otp);
+    const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000).toISOString();
+
+    const { error: insertErr } = await supabase
+      .from("phone_otps")
+      .insert({
+        phone,
+        otp_hash: otpHash,
+        otp_salt: otpSalt,
+        expires_at: expiresAt,
+        verified: false,
+      });
+
+    if (insertErr) {
+      logger.error("[auth/send-otp] Failed to store OTP:", insertErr.message);
+      return res.status(500).json({ success: false, error: "Internal server error." });
+    }
+
+    logger.info(`[auth/send-otp] OTP issued for phone: ${phone}`);
+    return res.status(200).json({
+      success: true,
+      message: "OTP sent successfully.",
+      expires_in_seconds: OTP_TTL_MINUTES * 60,
+      otp,
+    });
+  } catch (err) {
+    logger.error("[auth/send-otp] Unexpected error:", err.message);
+    return res.status(500).json({ success: false, error: "Internal server error." });
+  }
+});
 
 /**
  * @openapi
