@@ -271,7 +271,6 @@ class GraphQLGateway {
             }
 
             input UpdateOrderInput {
-                status: OrderStatus
                 pickup: LocationInput
                 dropoff: LocationInput
             }

@@ -115,7 +115,6 @@ const typeDefs = gql`
     }
 
     input UpdateOrderInput {
-        status: OrderStatus
         pickup: LocationInput
         dropoff: LocationInput
         driverId: ID
@@ -233,18 +232,23 @@ const resolvers = {
         updateOrder: async (_, { id, input }, { user }) => {
             const currentUser = requireUser(user);
             const updates = {
-                status: toDbStatus(input.status),
-                pickup_address: input.pickup?.address ?? undefined,
-                pickup_lat: input.pickup?.lat ?? undefined,
-                pickup_lng: input.pickup?.lng ?? undefined,
-                drop_address: input.dropoff?.address ?? undefined,
-                drop_lat: input.dropoff?.lat ?? undefined,
-                drop_lng: input.dropoff?.lng ?? undefined,
                 updated_at: new Date().toISOString()
             };
 
-            if (isAdmin(currentUser)) {
-                updates.driver_id = input.driverId || undefined;
+            if (input.pickup) {
+                updates.pickup_address = input.pickup.address;
+                updates.pickup_lat = input.pickup.lat;
+                updates.pickup_lng = input.pickup.lng;
+            }
+
+            if (input.dropoff) {
+                updates.drop_address = input.dropoff.address;
+                updates.drop_lat = input.dropoff.lat;
+                updates.drop_lng = input.dropoff.lng;
+            }
+
+            if (isAdmin(currentUser) && input.driverId) {
+                updates.driver_id = input.driverId;
             }
 
             let query = supabase
