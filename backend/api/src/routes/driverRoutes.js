@@ -718,8 +718,9 @@ router.get('/trips', authenticate, userLimiter, requirePolicy('driver:view-trips
   try {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
+    const userClient = createUserClient(req.token);
 
-    let query = supabase
+    let query = userClient
       .from('trips')
       .select('*', { count: 'exact' })
       .eq('driver_id', req.user.id);
@@ -742,11 +743,11 @@ router.get('/trips', authenticate, userLimiter, requirePolicy('driver:view-trips
     let ratingsMap = {};
     if (orderDisplayIds.length > 0) {
       const [ordersRes, ratingsRes] = await Promise.all([
-        supabase
+        userClient
           .from('orders')
           .select('order_display_id, escrow_status')
           .in('order_display_id', orderDisplayIds),
-        supabase
+        userClient
           .from('ratings')
           .select('order_display_id, stars')
           .in('order_display_id', orderDisplayIds)
@@ -811,7 +812,8 @@ router.get('/trips/:tripDisplayId', authenticate, userLimiter, requirePolicy('dr
   const { tripDisplayId } = req.params;
 
   try {
-    const { data: trip, error } = await supabase
+    const userClient = createUserClient(req.token);
+    const { data: trip, error } = await userClient
       .from('trips')
       .select('*')
       .eq('trip_display_id', tripDisplayId)
