@@ -625,6 +625,14 @@ router.get('/driver/statement', authenticate, requirePolicy('profile:view-statem
       };
     });
 
+    if (sort_by === 'net_earnings') {
+      // Optimize sorting: use net_earnings descending, fallback to pickup_date descending
+      tripsList.sort((a, b) => (b.net_earnings - a.net_earnings) || new Date(b.pickup_date) - new Date(a.pickup_date));
+    } else if (sort_by === 'base_freight') {
+      // Optimize sorting: use base_freight descending, fallback to pickup_date descending
+      tripsList.sort((a, b) => (b.base_freight - a.base_freight) || new Date(b.pickup_date) - new Date(a.pickup_date));
+    }
+
     if (format === 'csv') {
       // Optimize memory: construct CSV string directly using string builder/loop
       const sanitizeCsvValue = (val) => {
@@ -642,13 +650,6 @@ router.get('/driver/statement', authenticate, requirePolicy('profile:view-statem
       }
       res.setHeader('Content-Type', 'text/csv');
       return res.send(csvString.trimEnd());
-    }
-    if (sort_by === 'net_earnings') {
-      // Optimize sorting: use net_earnings descending, fallback to pickup_date descending
-      tripsList.sort((a, b) => (b.net_earnings - a.net_earnings) || new Date(b.pickup_date) - new Date(a.pickup_date));
-    } else if (sort_by === 'base_freight') {
-      // Optimize sorting: use base_freight descending, fallback to pickup_date descending
-      tripsList.sort((a, b) => (b.base_freight - a.base_freight) || new Date(b.pickup_date) - new Date(a.pickup_date));
     }
 
     res.json({
