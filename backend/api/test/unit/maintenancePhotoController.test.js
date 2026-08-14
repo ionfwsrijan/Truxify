@@ -8,6 +8,7 @@ const { dbMock, docMock, scanMock } = vi.hoisted(() => ({
 
 vi.mock('../../src/config/db.js', () => ({
   get supabase() { return dbMock.supabase; },
+  createUserClient: vi.fn(() => dbMock.supabase),
 }));
 
 vi.mock('../../src/middleware/logger.js', () => ({
@@ -20,7 +21,7 @@ vi.mock('../../src/lib/malwareScanner.js', () => scanMock);
 import { uploadMaintenancePhotos } from '../../src/controllers/maintenancePhotoController.js';
 
 function makeReqRes(overrides = {}) {
-  const req = { user: { id: 'driver-1' }, params: { ticketId: 't1' }, files: [], ...overrides };
+  const req = { user: { id: 'driver-1' }, token: 'test-token', params: { ticketId: 't1' }, files: [], ...overrides };
   const res = { status: vi.fn(() => res), json: vi.fn(() => res) };
   return { req, res };
 }
@@ -40,7 +41,7 @@ describe('maintenancePhotoController', () => {
   });
 
   it('returns 401 without a user', async () => {
-    const { req, res } = makeReqRes({ user: null });
+    const { req, res } = makeReqRes({ user: null, token: undefined });
     await uploadMaintenancePhotos(req, res);
     expect(res.status).toHaveBeenCalledWith(401);
   });
