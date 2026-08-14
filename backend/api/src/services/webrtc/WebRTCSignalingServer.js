@@ -5,6 +5,7 @@ import logger from '../../middleware/logger.js';
 import { supabase, redisClient, createUserClient } from '../../config/db.js';
 
 const OFFLINE_GPS_PAGE_SIZE = 1000;
+const LOCATION_RELAY_RADIUS_KM = 10;
 
 class WebRTCSignalingServer {
   constructor(server) {
@@ -164,6 +165,17 @@ class WebRTCSignalingServer {
       if (targetPeerId === peerId) continue;
       const targetPeer = this.peers.get(targetPeerId);
       if (targetPeer && targetPeer.ws.readyState === 1) {
+        if (
+          !targetPeer.location ||
+          this.calculateDistance(
+            location.lat,
+            location.lng,
+            targetPeer.location.lat,
+            targetPeer.location.lng
+          ) > LOCATION_RELAY_RADIUS_KM
+        ) {
+          continue;
+        }
         this.sendToPeer(targetPeerId, {
           type: 'peer-location',
           peerId,
